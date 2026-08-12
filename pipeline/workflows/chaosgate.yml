@@ -1,0 +1,97 @@
+# Copy this file to your target repository as:
+#   .github/workflows/chaosgate.yml
+#
+# ChaosGate can also run the same stages on the control-plane host
+# without Actions. This workflow is the version you attach to a repo
+# so pull requests are blocked by a required status check.
+
+name: ChaosGate
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  gate:
+    name: ChaosGate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect stack
+        id: detect
+        run: python pipeline/scripts/detect_app.py || python - <<'PY'
+        from pathlib import Path
+        root = Path(".")
+        print("files:", sorted(p.name for p in root.iterdir())[:30])
+        if (root / "chaosgate.yml").exists():
+            print("contract: chaosgate.yml present")
+        if (root / "requirements.txt").exists() or (root / "pyproject.toml").exists():
+            print("stack: python")
+        if (root / "package.json").exists():
+            print("stack: javascript")
+        PY
+
+      - name: Setup Python
+        if: hashFiles('requirements.txt', 'pyproject.toml') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python unit tests
+        if: hashFiles('requirements.txt', 'pyproject.toml') != ''
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest
+          python -m pytest -q
+
+      - name: Setup Node
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: JavaScript unit tests
+        if: hashFiles('package.json') != ''
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm test -- --watchAll=false
+
+      - name: Production build
+        if: hashFiles('package.json') != ''
+        run: |
+          if npm run | grep -q " build"; then npm run build; fi
+
+      - name: Secret scan
+        run: |
+          if grep -RInE --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.venv \
+            'AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk_live_[A-Za-z0-9]{16,}|BEGIN (RSA |OPENSSH )?PRIVATE KEY' . ; then
+            echo "Committed secret pattern found — gate sealed"
+            exit 1
+          fi
+          echo "No high-confidence secret patterns"
+
+      - name: Start stack
+        if: hashFiles('docker-compose.yml', 'compose.yml') != ''
+        run: |
+          docker compose up -d --wait || docker compose up -d
+          sleep 5
+
+      - name: k6 load
+        if: hashFiles('chaosgate.yml') != ''
+        uses: grafana/k6-action@v0.3.1
+        continue-on-error: false
+        with:
+          filename: pipeline/k6/load.js
+
+      - name: Verdict
+        run: |
+          echo "ChaosGate finished. Attach this job as a required status check"
+          echo "on the default branch so failed runs cannot merge."
