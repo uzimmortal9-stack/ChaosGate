@@ -356,7 +356,7 @@ def _stage_build(session, run, root: Path, detected, cfg) -> None:
 
     if detected.get("language") == "python":
         _log(session, run, "build", "Python app — compileall")
-        code, out = _run_cmd(f"{sys.executable} -m compileall -q .", root, timeout=40)
+        code, out = _run_cmd("python -m compileall -q .", root, timeout=40)
         for line in out.splitlines()[-40:]:
             _log(session, run, "build", line)
         if code == 0:
@@ -600,10 +600,11 @@ def _run_cmd(command: str, cwd: Path, timeout: int = 60) -> tuple[int, str]:
     bindir = str(Path(sys.executable).parent)
     env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
     # Honour the interpreter that launched ChaosGate (venv-safe).
+    python_executable = subprocess.list2cmdline([sys.executable])
     if command.startswith("python ") or command.startswith("python3 "):
-        command = sys.executable + command[command.index(" ") :]
+        command = python_executable + command[command.index(" ") :]
     elif command in {"python", "python3"}:
-        command = sys.executable
+        command = python_executable
     try:
         proc = subprocess.run(
             command,
