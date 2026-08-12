@@ -1,0 +1,37 @@
+version: 1
+
+app:
+  name: my-app
+  type: auto
+  compose_file: docker-compose.yml
+
+services:
+  api:
+    url: http://localhost:8000
+    health: /health
+
+tests:
+  unit:
+    command: python -m pytest -q
+  build:
+    command: python -m compileall -q .
+
+load:
+  target: http://localhost:8000
+  duration: 30s
+  vus: 20
+  endpoints:
+    - method: GET
+      path: /health
+  thresholds:
+    p95_ms: 800
+    error_rate: 0.05
+
+security:
+  secret_scan: true
+  dependency_scan: true
+  image_scan: false
+
+chaos:
+  enabled: false
+  experiments: []

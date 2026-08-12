@@ -1,0 +1,14 @@
+:root { color-scheme: dark; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  font: 16px/1.5 ui-sans-serif, system-ui, sans-serif;
+  background: #101218;
+  color: #ece7dc;
+  display: grid;
+  place-items: center;
+}
+main { max-width: 28rem; padding: 2rem; }
+.kicker { letter-spacing: 0.18em; text-transform: uppercase; font-size: 11px; color: #c9a227; }
+h1 { font-weight: 560; letter-spacing: -0.03em; }
+code { color: #7ad1c4; }

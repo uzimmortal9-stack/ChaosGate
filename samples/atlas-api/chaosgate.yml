@@ -1,0 +1,43 @@
+version: 1
+
+app:
+  name: atlas-api
+  type: python.api
+  compose_file: docker-compose.yml
+
+services:
+  api:
+    url: http://localhost:8000
+    health: /health
+
+tests:
+  unit:
+    command: python -m pytest -q
+  build:
+    command: python -m compileall -q .
+
+load:
+  target: http://localhost:8000
+  duration: 8s
+  vus: 8
+  endpoints:
+    - method: GET
+      path: /health
+    - method: GET
+      path: /api/items
+    - method: GET
+      path: /api/items/sku-104
+  thresholds:
+    p95_ms: 800
+    error_rate: 0.05
+
+security:
+  secret_scan: true
+  dependency_scan: true
+  image_scan: false
+
+chaos:
+  enabled: true
+  experiments:
+    - kill_api
+    - restart_api

@@ -1,0 +1,13 @@
+services:
+  chaosgate:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-chaosgate-dev-key-change-me}
+      HOST: 0.0.0.0
+      PORT: 5000
+    volumes:
+      - ./data:/app/data
+      - ./samples:/app/samples
+    restart: unless-stopped
