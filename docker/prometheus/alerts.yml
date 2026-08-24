@@ -1,0 +1,53 @@
+groups:
+  - name: chaosgate
+    interval: 30s
+    rules:
+      - alert: ChaosGateBlockingMerges
+        expr: increase(chaosgate_gate_blocked_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ChaosGate sealed a merge on {{ $labels.repo }}"
+          description: "Reason: {{ $labels.reason }}."
+
+      - alert: ChaosGateLoadRegression
+        expr: chaosgate_load_p95_milliseconds > 800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency regression on {{ $labels.repo }}"
+          description: "p95 is {{ $value | printf \"%.0f\" }}ms, above the 800ms gate threshold."
+
+      - alert: ChaosGateHighErrorRate
+        expr: chaosgate_load_error_rate > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Load error rate above 5% on {{ $labels.repo }}"
+
+      - alert: ChaosGateSecretCommitted
+        expr: increase(chaosgate_security_findings_total{severity="critical"}[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical security finding on {{ $labels.repo }}"
+
+      - alert: ChaosGateToolchainDegraded
+        expr: chaosgate_toolchain_available == 0
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.tool }} is unavailable on the ChaosGate host"
+          description: "The corresponding pipeline stage runs in degraded mode."
+
+      - alert: ChaosGateSlowPipeline
+        expr: histogram_quantile(0.95, sum by (le) (rate(chaosgate_pipeline_duration_seconds_bucket[30m]))) > 300
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Gate runs are taking over 5 minutes at p95"

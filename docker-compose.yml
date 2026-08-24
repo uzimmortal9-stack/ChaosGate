@@ -1,13 +1,108 @@
+# ChaosGate — control plane + optional observability stack.
+#
+#   docker compose up -d                              # just the gate
+#   docker compose --profile observability up -d      # + Prometheus + Grafana
+#
+# The gate needs the Docker socket to build target images. That is a real
+# privilege grant: it is mounted read-write on purpose and should only be
+# done on a machine you control.
+
+name: chaosgate
+
 services:
   chaosgate:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: chaosgate/control-plane:latest
+    container_name: chaosgate
     ports:
-      - "5000:5000"
+      - "${PORT:-5000}:5000"
     environment:
       SECRET_KEY: ${SECRET_KEY:-chaosgate-dev-key-change-me}
       HOST: 0.0.0.0
       PORT: 5000
+      DATABASE_URL: sqlite:///data/chaosgate.db
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
+      PROMETHEUS_PUSHGATEWAY: ${PROMETHEUS_PUSHGATEWAY:-}
+      GRAFANA_URL: ${GRAFANA_URL:-http://grafana:3000}
+      GRAFANA_API_KEY: ${GRAFANA_API_KEY:-}
+      K8S_NAMESPACE: ${K8S_NAMESPACE:-chaosgate}
+      K8S_APPLY: ${K8S_APPLY:-0}
+      GATE_MAX_P95_MS: ${GATE_MAX_P95_MS:-800}
+      GATE_MAX_ERROR_RATE: ${GATE_MAX_ERROR_RATE:-0.05}
     volumes:
-      - ./data:/app/data
-      - ./samples:/app/samples
+      - chaosgate-data:/app/data
+      - ./samples:/app/samples:ro
+      # Lets the Docker stage build real images. Remove to force degraded mode.
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=4).status==200 else 1)"]
+      interval: 20s
+      timeout: 6s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
+    networks: [gate]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: chaosgate-prometheus
+    profiles: [observability]
+    ports:
+      - "${PROM_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/alerts.yml:/etc/prometheus/rules/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    restart: unless-stopped
+    networks: [gate]
+    depends_on: [chaosgate]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: chaosgate-grafana
+    profiles: [observability]
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/chaosgate/chaosgate.json
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+    networks: [gate]
+    depends_on: [prometheus]
+
+  pushgateway:
+    image: prom/pushgateway:v1.9.0
+    container_name: chaosgate-pushgateway
+    profiles: [observability]
+    ports:
+      - "${PUSHGATEWAY_PORT:-9091}:9091"
+    restart: unless-stopped
+    networks: [gate]
+
+volumes:
+  chaosgate-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  gate:
+    driver: bridge

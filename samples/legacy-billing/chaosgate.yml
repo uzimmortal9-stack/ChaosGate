@@ -1,0 +1,30 @@
+version: 1
+app:
+  name: legacy-billing
+  type: python.api
+services:
+  api:
+    url: http://localhost:8000
+    health: /health
+tests:
+  unit:
+    command: python -m pytest -q
+load:
+  duration: 6s
+  vus: 8
+  endpoints:
+    - {method: GET, path: /health}
+    - {method: GET, path: /api/invoices}
+  thresholds:
+    p95_ms: 800
+    error_rate: 0.05
+    availability: 0.95
+security:
+  secret_scan: true
+  dependency_scan: true
+  env_scan: true
+  history_scan: true
+  cve_scan: true
+chaos:
+  enabled: true
+  experiments: [restart_api]
