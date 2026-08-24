@@ -61,11 +61,13 @@ GATE_REQUIRE_CONFIG = _flag("GATE_REQUIRE_CONFIG", "0")
 GATE_MAX_P95_MS = int(os.environ.get("GATE_MAX_P95_MS", "800"))
 GATE_MAX_ERROR_RATE = float(os.environ.get("GATE_MAX_ERROR_RATE", "0.05"))
 GATE_FAIL_ON_SECRET = _flag("GATE_FAIL_ON_SECRET", "1")
+GATE_MIN_AVAILABILITY = float(os.environ.get("GATE_MIN_AVAILABILITY", "0.95"))
 
 DEFAULT_POLICY = {
     "require_config": GATE_REQUIRE_CONFIG,
     "max_p95_ms": GATE_MAX_P95_MS,
     "max_error_rate": GATE_MAX_ERROR_RATE,
+    "min_availability": GATE_MIN_AVAILABILITY,
     "fail_on_secret": GATE_FAIL_ON_SECRET,
     "fail_on_unit": True,
     "fail_on_build": True,

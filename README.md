@@ -10,6 +10,13 @@ Grafana dashboard. Then it prints a verdict:
 - **PASS** — merge allowed
 - **FAIL** — `main` stays sealed, with the exact stage and reason
 
+GitHub's green tick comes from the Commit Status API, which is empty until some
+system writes to it. ChaosGate is that system: it produces the check, GitHub
+enforces it. And when bad code reaches `main` anyway, ChaosGate detects it, finds
+the last verified-good commit, and prepares a revert.
+
+> Responding to a review? See **[`docs/REVIEW_RESPONSE.md`](docs/REVIEW_RESPONSE.md)**.
+
 This repository is the **platform**. The apps in `samples/` are **targets** — applications
 under test, not the product.
 
@@ -33,7 +40,8 @@ Three sample targets are already connected:
 | --- | --- |
 | `atlas-shop/atlas-api` | Healthy Python API. Should **PASS**. |
 | `nova-labs/nova-web` | JS storefront. Should **PASS** with a lockfile warning. |
-| `mercury-pay/checkout-service` | Failing tests + a committed secret. Should **FAIL**. |
+| `mercury-pay/checkout-service` | Failing tests + a hardcoded secret. Should **FAIL**. |
+| `helios-fin/legacy-billing` | Zero hardcoded secrets — but `.env` is committed and the pinned deps carry CVEs. Should **FAIL**. |
 
 With the full observability stack:
 
@@ -102,11 +110,11 @@ required check on `main` and a failing gate cannot be merged.
 | 2 | **Detect** | Python / Django / FastAPI / Flask / Node / React / Compose + host capabilities |
 | 3 | **Unit** | `pytest`, `node --test`, `npm test`, or the contract's command |
 | 4 | **Build** | `npm run build`, `compileall`, or the contract's command |
-| 5 | **Security** | Committed secrets, unpinned deps, missing lockfiles |
+| 5 | **Security** | Hardcoded secrets · **committed `.env`** · **secrets in git history** · **CVEs via OSV.dev** · unpinned deps |
 | 6 | **Docker** | Dockerfile audit + a real `docker build`; reads back size, layers, user |
 | 7 | **Kubernetes** | Manifest discovery, production-readiness audit, server-side dry-run |
 | 8 | **Smoke** | Boots the target (container → Flask → static) and hits `/health` |
-| 9 | **Load** | Real **k6** when installed, else a threaded in-process generator |
+| 9 | **Load** | Real **k6** when installed, else a threaded in-process generator. Evaluates p95 / error-rate / availability / throughput SLOs |
 | 10 | **Prometheus** | Validates the exposition format, queries the server, pushes to a Pushgateway |
 | 11 | **Chaos** | Kills the process and measures recovery, per experiment |
 | 12 | **Grafana** | Builds a 20-panel dashboard and publishes it if credentials exist |

@@ -25,6 +25,15 @@ SAMPLES = [
         "last_status": "idle",
     },
     {
+        "owner": "helios-fin",
+        "name": "legacy-billing",
+        "language": "Python",
+        "description": "Credentials correctly in .env — but .env was committed, and the pinned "
+                       "dependencies carry published CVEs. Should be blocked.",
+        "folder": "legacy-billing",
+        "last_status": "idle",
+    },
+    {
         "owner": "mercury-pay",
         "name": "checkout-service",
         "language": "Python",

@@ -28,7 +28,16 @@ from typing import Any, Callable
 
 import httpx
 
-from core import docker_runner, grafana, k6_runner, k8s_runner, metrics, prometheus, workspace
+from core import (
+    docker_runner,
+    grafana,
+    k6_runner,
+    k8s_runner,
+    metrics,
+    prometheus,
+    supply_chain,
+    workspace,
+)
 from core.config_parser import parse_config, summarize_config
 from core.db import SessionLocal
 from core.detector import detect_app
@@ -195,6 +204,7 @@ def _execute_run(run_id: str, token: str | None) -> None:
             metrics.gate_blocked_total.inc(repo=repo_label, reason=reason)
 
         _publish_commit_status(session, run, repo, report, token)
+        _handle_post_merge_failure(session, run, repo, report, token)
 
         _emit(session, run.id, "done", {"status": run.status, "conclusion": conclusion, "report": report})
 
@@ -281,6 +291,56 @@ def _publish_commit_status(session, run, repo, report, token) -> None:
             _log(session, run, "verdict", f"Commented on PR #{run.pr_number}")
     except Exception as exc:  # noqa: BLE001
         _log(session, run, "verdict", f"Could not publish commit status: {exc}")
+
+
+def _handle_post_merge_failure(session, run, repo, report, token) -> None:
+    """Bad code already on the default branch is an incident, not a review comment.
+
+    The pre-merge gate cannot help here — the change is already merged. So the
+    gate switches roles: work out the last known-good commit, file an issue
+    naming the failing stage and the fix, and offer a revert.
+    """
+    if report.get("verdict") != "FAIL":
+        return
+    # A PR run is handled by the commit status; this is only for the branch itself.
+    if run.pr_number or run.branch != (repo.default_branch or "main"):
+        return
+
+    from core import recovery
+
+    plan = recovery.build_revert_plan(session, repo, run)
+    run.recovery_json = json.dumps(plan, default=str)
+    session.commit()
+
+    _log(session, run, "verdict", "")
+    _log(session, run, "verdict",
+         f"POST-MERGE FAILURE — {run.branch} is broken at {plan['bad_commit_short'] or 'unknown'}")
+    _log(session, run, "verdict", f"strategy: {plan['strategy']} — {plan.get('summary', '')}")
+    if plan.get("last_good"):
+        good = plan["last_good"]
+        _log(session, run, "verdict",
+             f"last known-good: {good['short_sha']} (score {good['score']})")
+    else:
+        _log(session, run, "verdict", "no earlier passing run recorded — fix forward")
+
+    if repo.is_sample or not token:
+        _log(session, run, "verdict",
+             "Incident not filed (sample target or no GitHub token).")
+        return
+
+    incident = recovery.open_incident(token, repo, run, plan, report)
+    if incident.get("created"):
+        run.incident_url = incident.get("url")
+        run.incident_number = incident.get("number")
+        session.commit()
+        _log(session, run, "verdict", f"Incident filed: {incident['url']}")
+    elif incident.get("existed"):
+        run.incident_url = incident.get("url")
+        session.commit()
+        _log(session, run, "verdict", f"Incident already open: {incident.get('url')}")
+    else:
+        _log(session, run, "verdict",
+             f"Could not file an incident: {incident.get('reason')}")
 
 
 def _pr_comment(run, report) -> str:
@@ -550,12 +610,69 @@ def _stage_security(session, run, root: Path, cfg, repo_label: str) -> list[dict
         for item in secrets[:25]:
             _log(session, run, "security", f"CRIT  {item['file']}:{item.get('line', '?')}  {item['title']}")
 
+    # Committed credential files — the case that matters when secrets live in
+    # .env rather than in source. A committed .env IS the breach.
+    if sec.get("env_scan", True):
+        env_findings = supply_chain.scan_committed_env(root)
+        env_findings.extend(supply_chain.check_gitignore(root))
+        findings.extend(env_findings)
+        _log(session, run, "security", f"Credential-file scan: {len(env_findings)} finding(s)")
+        for item in env_findings:
+            level = "CRIT" if item["severity"] == "critical" else "WARN"
+            _log(session, run, "security", f"{level}  {item['title']}")
+            if item.get("remediation"):
+                _log(session, run, "security", f"      fix: {item['remediation']}")
+
+    # Secrets that were deleted from HEAD but survive in git history.
+    history_result: dict[str, Any] = {}
+    if sec.get("history_scan", True):
+        history_result = supply_chain.scan_git_history(root)
+        if history_result.get("scanned"):
+            hist = history_result["findings"]
+            findings.extend(hist)
+            _log(
+                session, run, "security",
+                f"Git history scan: {len(hist)} finding(s) across "
+                f"{history_result.get('commits_scanned', 0)} commit(s)",
+            )
+            for item in hist[:15]:
+                _log(session, run, "security",
+                     f"CRIT  {item['title']} @ {item.get('commit')} in {item.get('file')}")
+        else:
+            _log(session, run, "security",
+                 f"Git history scan skipped: {history_result.get('reason')}")
+
     if sec.get("dependency_scan", True):
         deps = scan_dependencies(root)
         findings.extend(deps)
-        _log(session, run, "security", f"Dependency scan: {len(deps)} finding(s)")
+        _log(session, run, "security", f"Dependency hygiene: {len(deps)} finding(s)")
         for item in deps[:25]:
             _log(session, run, "security", f"WARN  {item['title']} — {item['detail'][:120]}")
+
+    # Known CVEs in pinned dependency versions (OSV.dev).
+    cve_result: dict[str, Any] = {}
+    cve_degraded = False
+    if sec.get("cve_scan", True):
+        _log(session, run, "security", "Querying OSV.dev for known vulnerabilities…")
+        cve_result = supply_chain.scan_dependencies_cve(root)
+        if cve_result.get("available"):
+            cve_findings = cve_result["findings"]
+            findings.extend(cve_findings)
+            _log(
+                session, run, "security",
+                f"CVE scan: {cve_result.get('vulnerable', 0)} of "
+                f"{cve_result.get('queried', 0)} package(s) vulnerable",
+            )
+            for item in cve_findings[:20]:
+                level = "CRIT" if item["severity"] == "critical" else "WARN"
+                _log(session, run, "security", f"{level}  {item['title']}")
+                _log(session, run, "security", f"      {item['remediation']}")
+        else:
+            cve_degraded = True
+            _log(session, run, "security",
+                 f"CVE scan unavailable: {cve_result.get('reason')}")
+            _log(session, run, "security",
+                 "Dependencies were NOT checked against any advisory database.")
 
     for finding in findings:
         metrics.security_findings_total.inc(
@@ -563,9 +680,23 @@ def _stage_security(session, run, root: Path, cfg, repo_label: str) -> list[dict
         )
 
     critical = [f for f in findings if f.get("severity") == "critical"]
-    payload = {"findings": findings, "critical": len(critical), "warnings": len(findings) - len(critical)}
+    payload = {
+        "findings": findings,
+        "critical": len(critical),
+        "warnings": len(findings) - len(critical),
+        "history": {k: v for k, v in history_result.items() if k != "findings"},
+        "cve": {k: v for k, v in (cve_result or {}).items() if k != "findings"},
+        "degraded": cve_degraded,
+    }
+
     if critical:
-        _end(session, run, stage, "failed", f"{len(critical)} critical security finding(s)", payload)
+        _end(session, run, stage, "failed",
+             f"{len(critical)} critical security finding(s)", payload)
+    elif cve_degraded:
+        # No CVE data means we cannot claim the dependencies are clean.
+        _end(session, run, stage, "degraded",
+             f"{len(findings)} finding(s) · CVE database unreachable",
+             payload, degraded=True)
     else:
         _end(
             session, run, stage, "passed",
@@ -886,11 +1017,59 @@ def _stage_load(session, run, runtime: dict[str, Any], cfg, policy, repo_label: 
         f"p95={result['p95_ms']}ms avg={result['avg_ms']}ms err={result['error_rate']:.2%}"
     )
 
-    reasons = []
-    if result["p95_ms"] > max_p95:
-        reasons.append(f"p95 {result['p95_ms']:.0f}ms exceeds {max_p95}ms")
-    if result["error_rate"] > max_err:
-        reasons.append(f"error rate {result['error_rate']:.1%} exceeds {max_err:.1%}")
+    # Evaluate each service-level objective explicitly, so the report shows
+    # *which* objective failed rather than a bare "load test failed".
+    availability = 1.0 - result["error_rate"]
+    min_availability = float(thresholds.get("availability") or policy.get("min_availability") or 0.95)
+
+    objectives = [
+        {
+            "name": "p95 latency",
+            "measured": round(result["p95_ms"], 1),
+            "threshold": max_p95,
+            "unit": "ms",
+            "comparator": "<=",
+            "passed": result["p95_ms"] <= max_p95,
+        },
+        {
+            "name": "error rate",
+            "measured": round(result["error_rate"] * 100, 2),
+            "threshold": round(max_err * 100, 2),
+            "unit": "%",
+            "comparator": "<=",
+            "passed": result["error_rate"] <= max_err,
+        },
+        {
+            "name": "availability",
+            "measured": round(availability * 100, 2),
+            "threshold": round(min_availability * 100, 2),
+            "unit": "%",
+            "comparator": ">=",
+            "passed": availability >= min_availability,
+        },
+        {
+            "name": "throughput",
+            "measured": round(result["rps"], 1),
+            "threshold": float(thresholds.get("min_rps") or 0),
+            "unit": "req/s",
+            "comparator": ">=",
+            "passed": result["rps"] >= float(thresholds.get("min_rps") or 0),
+        },
+    ]
+    payload["objectives"] = objectives
+    payload["availability"] = round(availability, 5)
+
+    log("── service level objectives ──")
+    for obj in objectives:
+        mark = "PASS" if obj["passed"] else "FAIL"
+        log(f"  {mark}  {obj['name']:<14} {obj['measured']}{obj['unit']} "
+            f"{obj['comparator']} {obj['threshold']}{obj['unit']}")
+
+    reasons = [
+        f"{o['name']} {o['measured']}{o['unit']} violates {o['comparator']} "
+        f"{o['threshold']}{o['unit']}"
+        for o in objectives if not o["passed"]
+    ]
     if result.get("thresholds_breached"):
         reasons.append("k6 reported a threshold breach")
 

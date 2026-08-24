@@ -29,6 +29,7 @@
     diff: "",
     diffPath: null,
     pushing: false,
+    showRecovery: null,
     selected: null,     // Set of paths, null = all
     strategy: null,
     modal: null,
@@ -69,6 +70,9 @@
     runs: (repoId) => api.req(repoId ? `/api/runs?repo_id=${repoId}` : "/api/runs"),
     run: (id) => api.req(`/api/runs/${id}`),
     artifacts: (id) => api.req(`/api/runs/${id}/artifacts`),
+    recovery: (id) => api.req(`/api/runs/${id}/recovery`),
+    revert: (id) => api.req(`/api/runs/${id}/revert`, { method: "POST" }),
+    fileIncident: (id) => api.req(`/api/runs/${id}/incident`, { method: "POST" }),
 
     ghRepos: (q = "") => api.req(`/api/github/repos${q ? `?q=${encodeURIComponent(q)}` : ""}`),
     policy: () => api.req("/api/policy"),
@@ -764,6 +768,14 @@
         <div class="stat"><b>${m.samples ?? "—"}</b><span>samples</span></div>
       </div>
       ${m.histogram?.length ? `<div style="margin:10px 0">${histogram(m.histogram)}<p class="help tiny">latency distribution · engine: ${esc(m.engine || "?")}</p></div>` : ""}
+      ${(m.objectives || []).length ? `<table class="metric-table" style="margin-bottom:10px">
+        <thead><tr><th>Objective</th><th>Measured</th><th>Threshold</th><th>Result</th></tr></thead>
+        <tbody>${m.objectives.map((o) => `<tr>
+          <td class="mname">${esc(o.name)}</td>
+          <td>${o.measured}${esc(o.unit)}</td>
+          <td class="mtype">${esc(o.comparator)} ${o.threshold}${esc(o.unit)}</td>
+          <td>${o.passed ? `<span class="pill go">PASS</span>` : `<span class="pill stop">FAIL</span>`}</td>
+        </tr>`).join("")}</tbody></table>` : ""}
       <dl class="kv">
         <dt>engine</dt><dd>${esc(m.engine || "—")}</dd>
         <dt>avg / med</dt><dd>${m.avg_ms ?? "—"}ms / ${m.med_ms ?? "—"}ms</dd>
@@ -838,10 +850,22 @@
 
     if (stage.key === "security") {
       const f = m.findings || [];
-      return f.length ? f.slice(0, 24).map((x) => `
-        <div class="finding-row"><span class="sev ${esc(x.severity)}">${esc(x.severity)}</span>
-        <span><b>${esc(x.title)}</b><br><span class="muted tiny">${esc(x.detail)}</span></span></div>`).join("")
-        : `<p class="help">No findings.</p>`;
+      const hist = m.history || {};
+      const cve = m.cve || {};
+      const chips = [
+        hist.scanned ? `<span class="pill">history: ${hist.commits_scanned} commit(s)</span>` : "",
+        cve.available === true ? `<span class="pill go">CVE: ${cve.vulnerable ?? 0}/${cve.queried ?? 0} vulnerable</span>` : "",
+        cve.available === false ? `<span class="pill hold">CVE scan unavailable</span>` : "",
+      ].filter(Boolean).join(" ");
+      return `${chips ? `<div class="row wrap" style="margin-bottom:10px;gap:6px">${chips}</div>` : ""}
+        ${cve.available === false ? `<div class="banner"><div><b>Dependencies were not checked</b>
+          <p>${esc(cve.reason || "the advisory database was unreachable")}. This is not a clean bill of health.</p></div></div>` : ""}
+        ${f.length ? f.slice(0, 30).map((x) => `
+          <div class="finding-row"><span class="sev ${esc(x.severity)}">${esc(x.severity)}</span>
+          <span><b>${esc(x.title)}</b><br><span class="muted tiny">${esc(x.detail)}</span>
+          ${x.remediation ? `<br><code class="tiny" style="color:var(--go)">${esc(x.remediation)}</code>` : ""}
+          </span></div>`).join("")
+          : `<p class="help">No findings.</p>`}`;
     }
 
     if (stage.key === "detect") {
@@ -863,6 +887,43 @@
       </dl>`;
     }
     return "";
+  }
+
+  function recoveryBanner(run) {
+    const plan = run.recovery;
+    if (!plan) return "";
+    const good = plan.last_good;
+    const stages = plan.failing_stages || [];
+    return `<div class="banner stop" style="border-left-color:var(--stop)">
+      <div style="flex:1">
+        <b>Already merged — ${esc(plan.branch)} is broken at <code>${esc(plan.bad_commit_short || "?")}</code></b>
+        <p>
+          This commit is on the default branch, so the pre-merge gate could not stop it.
+          ${stages.length ? `Failing: ${stages.map((s) => esc(s.name)).join(", ")}.` : ""}
+        </p>
+        <p style="margin-top:6px">
+          ${good
+            ? `Last verified-good commit: <code>${esc(good.short_sha)}</code> (score ${good.score}).`
+            : `No earlier passing run is recorded, so there is no verified commit to return to.`}
+          Strategy: <b>${esc(plan.strategy)}</b>.
+        </p>
+        <div class="row wrap" style="margin-top:10px;gap:8px">
+          ${plan.strategy === "revert" && !run.reverted_by
+            ? `<button class="btn btn-sm btn-stop" data-act="revert-run" data-id="${esc(run.id)}">Open revert PR</button>`
+            : ""}
+          ${run.reverted_by
+            ? `<a class="pill go" href="${esc(run.reverted_by)}" target="_blank" rel="noreferrer">revert opened ↗</a>`
+            : ""}
+          ${run.incident_url
+            ? `<a class="pill" href="${esc(run.incident_url)}" target="_blank" rel="noreferrer">incident #${run.incident_number} ↗</a>`
+            : `<button class="btn btn-sm" data-act="file-incident" data-id="${esc(run.id)}">File incident</button>`}
+          <button class="btn btn-sm" data-act="show-recovery" data-id="${esc(run.id)}">Show commands</button>
+        </div>
+        ${state.showRecovery === run.id && (plan.commands || []).length
+          ? `<pre class="code" style="margin-top:10px">${esc(plan.commands.join("\n"))}</pre>`
+          : ""}
+      </div>
+    </div>`;
   }
 
   function runView() {
@@ -910,6 +971,7 @@
         <button class="btn" data-act="run" data-id="${esc(run.repo_id)}">Run again</button>
       </div>
 
+      ${recoveryBanner(run)}
       ${reasons.length ? `<div class="banner stop"><div><b>${reasons.length} blocking reason${reasons.length > 1 ? "s" : ""}</b>
         <p>${reasons.map(esc).join("<br>")}</p></div></div>` : ""}
       ${degraded.length ? `<div class="banner"><div><b>${degraded.length} stage${degraded.length > 1 ? "s" : ""} ran degraded</b>
@@ -1601,6 +1663,29 @@
         }
 
         case "goto-run": { state.modal = null; return go(`/console/runs/${el.dataset.id}`); }
+
+        case "show-recovery": {
+          state.showRecovery = state.showRecovery === el.dataset.id ? null : el.dataset.id;
+          return paint();
+        }
+
+        case "revert-run": {
+          if (!confirm("Open a pull request that reverts this commit?\n\nChaosGate never pushes directly to a shared branch — you review and merge the PR.")) return;
+          el.disabled = true;
+          el.textContent = "Opening revert…";
+          const res = await api.revert(el.dataset.id);
+          state.run = (await api.run(el.dataset.id)).run;
+          toast(res.pull_request ? `Revert PR #${res.pull_request.number} opened` : `Revert branch ${res.branch} pushed`);
+          return paint();
+        }
+
+        case "file-incident": {
+          el.disabled = true;
+          const res = await api.fileIncident(el.dataset.id);
+          state.run = (await api.run(el.dataset.id)).run;
+          toast(res.existed ? "Incident already open" : `Incident #${res.number} filed`);
+          return paint();
+        }
 
         case "focus-stage": {
           const key = el.dataset.key;

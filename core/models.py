@@ -95,6 +95,11 @@ class PipelineRun(Base):
     score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Post-merge recovery: set when a run fails on the default branch.
+    recovery_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    incident_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    incident_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reverted_by: Mapped[str | None] = mapped_column(String(500), nullable=True)
     duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

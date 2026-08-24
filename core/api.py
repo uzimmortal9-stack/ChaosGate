@@ -615,6 +615,97 @@ def get_run(run_id: str):
         db.close()
 
 
+@api.get("/runs/<run_id>/recovery")
+def run_recovery(run_id: str):
+    """What it would take to recover from this failing run. Read-only."""
+    db = _db()
+    try:
+        run = db.get(PipelineRun, run_id)
+        if not run:
+            return _err("Run not found", 404)
+        from core import recovery
+
+        plan = json.loads(run.recovery_json) if run.recovery_json else None
+        if plan is None:
+            plan = recovery.build_revert_plan(db, run.repo, run)
+        return jsonify({
+            "plan": plan,
+            "incident_url": run.incident_url,
+            "reverted_by": run.reverted_by,
+            "can_revert": bool(run.commit_sha) and not run.repo.is_sample,
+        })
+    finally:
+        db.close()
+
+
+@api.post("/runs/<run_id>/revert")
+def run_revert(run_id: str):
+    """Open a revert pull request for a failing default-branch commit.
+
+    Deliberately a PR, not a push to the branch: a recovery tool that rewrites
+    a shared branch on its own becomes the next outage.
+    """
+    db = _db()
+    try:
+        run = db.get(PipelineRun, run_id)
+        if not run:
+            return _err("Run not found", 404)
+        repo = run.repo
+        if repo.is_sample:
+            return _err("Sample targets have no GitHub remote to revert against.")
+        if not run.commit_sha:
+            return _err("This run has no commit SHA to revert.")
+        token = _token(db)
+        if not token:
+            return _err("Connect GitHub before reverting.", 401)
+
+        from core import recovery
+
+        result = recovery.execute_revert(
+            repo.id, repo.full_name, token, run.commit_sha,
+            repo.default_branch or "main",
+        )
+        if not result.get("ok"):
+            return jsonify(result), 400
+
+        pull = result.get("pull_request") or {}
+        run.reverted_by = pull.get("html_url") or result.get("branch")
+        db.commit()
+        return jsonify({**result, "run": run_dict(run)})
+    finally:
+        db.close()
+
+
+@api.post("/runs/<run_id>/incident")
+def run_incident(run_id: str):
+    """File (or find) the GitHub issue for a failing default-branch run."""
+    db = _db()
+    try:
+        run = db.get(PipelineRun, run_id)
+        if not run:
+            return _err("Run not found", 404)
+        if run.repo.is_sample:
+            return _err("Sample targets have no GitHub repository to file against.")
+        token = _token(db)
+        if not token:
+            return _err("Connect GitHub first.", 401)
+
+        from core import recovery
+
+        report = json.loads(run.report_json) if run.report_json else None
+        plan = json.loads(run.recovery_json) if run.recovery_json else \
+            recovery.build_revert_plan(db, run.repo, run)
+        result = recovery.open_incident(token, run.repo, run, plan, report)
+        if result.get("created") or result.get("existed"):
+            run.incident_url = result.get("url")
+            run.incident_number = result.get("number")
+            db.commit()
+            return jsonify(result)
+        return jsonify(result), 400
+    finally:
+        db.close()
+
+
 @api.get("/runs/<run_id>/artifacts")
 def run_artifacts(run_id: str):
     directory = ARTIFACTS_DIR / run_id
