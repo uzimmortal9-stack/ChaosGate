@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 
 from flask import Flask, Response, g, render_template, request, send_from_directory
 from flask_cors import CORS
@@ -101,6 +102,37 @@ def create_app() -> Flask:
     @app.get("/favicon.svg")
     def favicon():
         return send_from_directory(app.static_folder, "img/mark.svg")
+
+    # ------------------------------------------------------ cache busting
+    _asset_cache: dict[str, tuple[str, str]] = {}
+
+    def asset_version(rel_path: str) -> str:
+        """Content hash for a static file, so a deploy invalidates the browser
+        cache. Without this the SPA keeps running the previously cached
+        app.js and UI changes appear not to have shipped."""
+        from hashlib import md5
+
+        full = Path(app.static_folder) / rel_path
+        try:
+            stat = full.stat()
+        except OSError:
+            return "0"
+        # Key on size as well as mtime: a same-size rewrite within one
+        # filesystem timestamp tick would otherwise reuse a stale hash.
+        stamp = f"{stat.st_mtime_ns}-{stat.st_size}"
+        cached = _asset_cache.get(rel_path)
+        if cached and cached[0] == stamp:
+            return cached[1]
+        try:
+            digest = md5(full.read_bytes(), usedforsecurity=False).hexdigest()[:10]
+        except (OSError, TypeError):
+            digest = str(stat.st_mtime_ns)
+        _asset_cache[rel_path] = (stamp, digest)
+        return digest
+
+    @app.context_processor
+    def inject_asset_versions():
+        return {"asset_version": asset_version}
 
     @app.errorhandler(404)
     def not_found(_):

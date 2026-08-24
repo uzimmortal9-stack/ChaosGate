@@ -5,6 +5,7 @@ session because reloading the SQLAlchemy models would re-register the tables.
 """
 
 import json
+from pathlib import Path
 
 
 def test_health_endpoints(client):
@@ -212,3 +213,34 @@ def test_webhook_signature_accepted_when_valid(client, monkeypatch):
                       headers={"X-GitHub-Event": "ping", "Content-Type": "application/json",
                                "X-Hub-Signature-256": sig})
     assert res.status_code == 200
+
+
+# ------------------------------------------------------------ cache busting
+def test_static_urls_are_versioned(client):
+    """Without a version query the browser keeps running a cached app.js and
+    UI changes appear not to have shipped."""
+    html = client.get("/").get_data(as_text=True)
+    assert 'src="/static/js/app.js?v=' in html
+    assert 'href="/static/css/style.css?v=' in html
+
+
+def test_asset_version_changes_with_content(client, tmp_path, monkeypatch):
+    import re
+
+    from flask import current_app
+
+    first = client.get("/").get_data(as_text=True)
+    token = re.search(r"app\.js\?v=([a-f0-9]+)", first).group(1)
+    assert len(token) == 10
+
+    path = Path(current_app.static_folder) / "js/app.js"
+    original = path.read_bytes()
+    try:
+        path.write_bytes(original + b"\n// probe\n")
+        changed = client.get("/").get_data(as_text=True)
+        assert re.search(r"app\.js\?v=([a-f0-9]+)", changed).group(1) != token
+    finally:
+        path.write_bytes(original)
+
+    restored = client.get("/").get_data(as_text=True)
+    assert re.search(r"app\.js\?v=([a-f0-9]+)", restored).group(1) == token

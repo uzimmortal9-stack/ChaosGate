@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ChaosGate — the release gate</title>
+  <title>ChaosGate — Continuous Resilience and Security Gateway</title>
   <meta name="description" content="Connect a GitHub repository. ChaosGate tests it with unit, security, traffic and chaos stages, then opens or seals the merge." />
   <link rel="icon" type="image/svg+xml" href="/static/img/mark.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@300;400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="stylesheet" href="/static/css/style.css?v={{ asset_version('css/style.css') }}" />
 </head>
 <body>
   <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -24,6 +24,6 @@
     </ol>
   </div>
   <div id="app"></div>
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v={{ asset_version('js/app.js') }}"></script>
 </body>
 </html>
