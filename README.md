@@ -22,7 +22,12 @@ make install     # creates .venv and installs dependencies
 make run         # http://localhost:5000
 ```
 
-Click **Launch demo console**. Three sample targets are already connected:
+Open **http://localhost:5000** and click **Launch demo console**.
+
+> Full setup walkthrough — GitHub connection, the push loop, getting stages out of
+> degraded mode, troubleshooting: **[`docs/RUNNING_LOCALLY.md`](docs/RUNNING_LOCALLY.md)**
+
+Three sample targets are already connected:
 
 | Target | What happens |
 | --- | --- |
