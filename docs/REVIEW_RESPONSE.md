@@ -142,7 +142,7 @@ CRIT  AWS Access Key found in git history @ 8f121b91 in leak.py
 No code review catches this — the file is not in `HEAD` anymore. Reviewers
 literally cannot see it.
 
-The scanner skips vendor-documented dummies (`AKIAIOSFODNN7EXAMPLE`) by exact
+The scanner skips vendor-documented dummies (AWS's published `AKIA…EXAMPLE` key) by exact
 match rather than by "contains the word example", so a real key in a file named
 `example.py` is still caught.
 

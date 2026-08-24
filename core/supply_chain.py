@@ -69,10 +69,10 @@ PLACEHOLDER = re.compile(
 # "contains the word example" would also hide a live key that happens to sit
 # in a file named example.py.
 KNOWN_DUMMY_TOKENS = {
-    "AKIAIOSFODNN7EXAMPLE",           # AWS docs
-    "AKIAEXAMPLEKEY00000",
-    "sk_live_00000000000000000000",
-    "AIzaSyDUMMYKEY0000000000000000000000000",
+    "AKIAIOSFODNN7EXAMPLE",           # AWS docs  # pragma: allowlist secret
+    "AKIAEXAMPLEKEY00000",  # pragma: allowlist secret
+    "sk_live_00000000000000000000",  # pragma: allowlist secret
+    "AIzaSyDUMMYKEY0000000000000000000000000",  # pragma: allowlist secret
 }
 
 

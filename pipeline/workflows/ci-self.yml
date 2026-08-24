@@ -1,0 +1,203 @@
+# ChaosGate's own CI.
+#
+# INSTALL THIS FILE AS:  .github/workflows/ci.yml
+#
+#     mkdir -p .github/workflows
+#     cp pipeline/workflows/ci-self.yml .github/workflows/ci.yml
+#     git add .github/workflows/ci.yml && git commit -m "ci: add checks" && git push
+#
+# It is shipped here rather than in .github/ because pushing workflow files
+# requires a token with the `workflows` scope, which the automation account
+# that generated this branch does not have.
+#
+# Once installed, mark "ChaosGate CI" as a required status check on main
+# (Settings -> Branches -> Branch protection rules) so a failing run blocks
+# the merge. That is the whole thesis of this project applied to itself:
+# the tick exists only because a CI system produces it.
+
+name: ChaosGate CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # history scanning needs real history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile
+        run: python -m compileall -q core app.py scripts
+
+      - name: Test suite
+        run: python -m pytest -q
+
+      - name: Boot check
+        run: |
+          python app.py &
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5000/healthz && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5000/healthz
+          curl -fsS http://127.0.0.1:5000/readyz
+          curl -fsS http://127.0.0.1:5000/metrics | head -5
+          curl -fsS http://127.0.0.1:5000/api/health
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Syntax check the SPA
+        run: node --check web/static/js/app.js
+
+  config:
+    name: Config validity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install PyYAML
+
+      - name: Validate YAML and JSON
+        run: |
+          python - <<'PY'
+          import json, sys, glob, yaml
+          from pathlib import Path
+
+          failures = []
+          targets = [
+              "docker-compose.yml",
+              "pipeline/workflows/chaosgate.yml",
+              "pipeline/workflows/ci-self.yml",
+              "k8s/chaosgate.yaml",
+              "docker/prometheus/prometheus.yml",
+              "docker/prometheus/alerts.yml",
+              "docs/chaosgate.example.yml",
+          ]
+          targets += glob.glob("docker/grafana/provisioning/**/*.yml", recursive=True)
+          targets += glob.glob("samples/*/chaosgate.yml")
+
+          for t in targets:
+              p = Path(t)
+              if not p.is_file():
+                  failures.append(f"missing: {t}")
+                  continue
+              try:
+                  list(yaml.safe_load_all(p.read_text()))
+                  print(f"ok  {t}")
+              except Exception as exc:
+                  failures.append(f"{t}: {exc}")
+
+          for t in glob.glob("docker/grafana/provisioning/dashboards/**/*.json", recursive=True):
+              try:
+                  json.loads(Path(t).read_text())
+                  print(f"ok  {t}")
+              except Exception as exc:
+                  failures.append(f"{t}: {exc}")
+
+          if failures:
+              print("\nFAILURES:")
+              for f in failures:
+                  print(" ", f)
+              sys.exit(1)
+          PY
+
+      - name: Kubernetes manifests pass our own audit
+        run: |
+          python - <<'PY'
+          import sys, yaml
+          sys.path.insert(0, ".")
+          from core import k8s_runner
+
+          docs = [d for d in yaml.safe_load_all(open("k8s/chaosgate.yaml")) if d]
+          findings = k8s_runner.audit(docs)
+          for f in findings:
+              print(f"{f['severity']:>8}  {f['rule']}: {f['detail']}")
+          blocking = [f for f in findings if f["severity"] in ("critical", "warning")]
+          if blocking:
+              sys.exit(f"{len(blocking)} blocking manifest finding(s)")
+          print(f"clean: {len(docs)} documents audited")
+          PY
+
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: ChaosGate scans itself
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, ".")
+          from core.scanners import scan_secrets
+          from core import supply_chain as sc
+
+          # Deliberate fixtures: these exist so the gate has something to fail on.
+          ALLOWED = {"samples/checkout-service/app.py", "samples/legacy-billing/.env"}
+
+          findings = [f for f in scan_secrets(Path(".")) if f["file"] not in ALLOWED]
+          env = [f for f in sc.scan_committed_env(Path(".")) if f["file"] not in ALLOWED]
+
+          for f in findings + env:
+              print(f"{f['severity']:>8}  {f.get('file')}  {f['title']}")
+
+          total = len(findings) + len(env)
+          if total:
+              sys.exit(f"{total} unexpected secret finding(s)")
+          print("clean — only the intentional demo fixtures remain")
+          PY
+
+      - name: Dependency vulnerabilities
+        continue-on-error: true   # advisory: do not block on a third-party outage
+        run: |
+          pip install pip-audit
+          pip-audit --requirement requirements.txt --strict || true

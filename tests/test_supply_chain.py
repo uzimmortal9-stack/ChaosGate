@@ -63,7 +63,7 @@ def test_untracked_env_is_not_flagged(tmp_path):
 
 def test_private_key_committed(tmp_path):
     root = _git_repo(tmp_path)
-    (root / "id_rsa").write_text("-----BEGIN RSA PRIVATE KEY-----\nMIIEow==\n")
+    (root / "id_rsa").write_text("-----BEGIN RSA PRIVATE KEY-----\nMIIEow==\n")  # pragma: allowlist secret
     _commit(root, "key")
     findings = sc.scan_committed_env(root)
     assert any(f["severity"] == "critical" and "id_rsa" in f["title"] for f in findings)
@@ -121,7 +121,7 @@ def test_secret_deleted_from_head_is_still_found(tmp_path):
     (root / "app.py").write_text("x = 1\n")
     _commit(root, "init")
 
-    (root / "config.py").write_text('AWS = "AKIA3XQZM7PLKD2NVBWC"\n')
+    (root / "config.py").write_text('AWS = "AKIA3XQZM7PLKD2NVBWC"\n')  # pragma: allowlist secret
     _commit(root, "add config")
 
     (root / "config.py").unlink()
@@ -140,16 +140,16 @@ def test_secret_deleted_from_head_is_still_found(tmp_path):
 
 def test_history_finds_github_pat(tmp_path):
     root = _git_repo(tmp_path)
-    (root / "s.py").write_text('T = "ghp_9sKmQ2xVn4RtY7wZ1aB3cD5eF6gH8iJ0kL2m"\n')
+    (root / "s.py").write_text('T = "ghp_9sKmQ2xVn4RtY7wZ1aB3cD5eF6gH8iJ0kL2m"\n')  # pragma: allowlist secret
     _commit(root, "token")
     result = sc.scan_git_history(root)
     assert any("GitHub PAT" in f["title"] for f in result["findings"])
 
 
 def test_history_skips_documented_dummy_keys(tmp_path):
-    """AWS publishes AKIAIOSFODNN7EXAMPLE in its own docs."""
+    """AWS publishes AKIAIOSFODNN7EXAMPLE in its own docs."""  # pragma: allowlist secret
     root = _git_repo(tmp_path)
-    (root / "readme.py").write_text('EXAMPLE = "AKIAIOSFODNN7EXAMPLE"\n')
+    (root / "readme.py").write_text('EXAMPLE = "AKIAIOSFODNN7EXAMPLE"\n')  # pragma: allowlist secret
     _commit(root, "docs")
     assert sc.scan_git_history(root)["findings"] == []
 
@@ -163,11 +163,11 @@ def test_history_on_non_git_directory(tmp_path):
 @pytest.mark.parametrize(
     "token,dummy",
     [
-        ("AKIAIOSFODNN7EXAMPLE", True),
-        ("AKIAXXXXXXXXXXXXXXXX", True),
-        ("sk_live_00000000000000000000", True),
-        ("AKIA3XQZM7PLKD2NVBWC", False),
-        ("ghp_9sKmQ2xVn4RtY7wZ1aB3cD5eF6gH8iJ0kL2m", False),
+        ("AKIAIOSFODNN7EXAMPLE", True),  # pragma: allowlist secret
+        ("AKIAXXXXXXXXXXXXXXXX", True),  # pragma: allowlist secret
+        ("sk_live_00000000000000000000", True),  # pragma: allowlist secret
+        ("AKIA3XQZM7PLKD2NVBWC", False),  # pragma: allowlist secret
+        ("ghp_9sKmQ2xVn4RtY7wZ1aB3cD5eF6gH8iJ0kL2m", False),  # pragma: allowlist secret
     ],
 )
 def test_dummy_token_detection(token, dummy):
