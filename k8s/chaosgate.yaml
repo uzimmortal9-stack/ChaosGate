@@ -1,0 +1,261 @@
+# ChaosGate control plane on Kubernetes.
+#
+#   kubectl apply -f k8s/chaosgate.yaml
+#   kubectl -n chaosgate rollout status deploy/chaosgate
+#
+# This manifest passes ChaosGate's own Kubernetes audit: pinned image,
+# probes, resource bounds, non-root, dropped capabilities, an HPA and a PDB.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaosgate
+  labels:
+    app.kubernetes.io/name: chaosgate
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: chaosgate
+  namespace: chaosgate
+type: Opaque
+stringData:
+  # Replace before applying to anything that matters.
+  SECRET_KEY: "change-me-in-production"
+  GITHUB_CLIENT_ID: ""
+  GITHUB_CLIENT_SECRET: ""
+  GITHUB_WEBHOOK_SECRET: ""
+  GRAFANA_API_KEY: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chaosgate
+  namespace: chaosgate
+data:
+  HOST: "0.0.0.0"
+  PORT: "5000"
+  DATABASE_URL: "sqlite:///data/chaosgate.db"
+  PROMETHEUS_URL: "http://prometheus.monitoring.svc.cluster.local:9090"
+  GRAFANA_URL: "http://grafana.monitoring.svc.cluster.local:3000"
+  K8S_NAMESPACE: "chaosgate"
+  K8S_APPLY: "0"
+  GATE_MAX_P95_MS: "800"
+  GATE_MAX_ERROR_RATE: "0.05"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chaosgate-data
+  namespace: chaosgate
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chaosgate
+  namespace: chaosgate
+---
+# The gate validates manifests server-side, so it needs read + dry-run rights.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chaosgate
+  namespace: chaosgate
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chaosgate
+  namespace: chaosgate
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: chaosgate
+subjects:
+  - kind: ServiceAccount
+    name: chaosgate
+    namespace: chaosgate
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaosgate
+  namespace: chaosgate
+  labels:
+    app.kubernetes.io/name: chaosgate
+    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/managed-by: chaosgate
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: chaosgate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: chaosgate
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5000"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: chaosgate
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: chaosgate
+          image: chaosgate/control-plane:2.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+          envFrom:
+            - configMapRef:
+                name: chaosgate
+            - secretRef:
+                name: chaosgate
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 4
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 30
+            periodSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: chaosgate-data
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chaosgate
+  namespace: chaosgate
+  labels:
+    app.kubernetes.io/name: chaosgate
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "5000"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: chaosgate
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: chaosgate
+  namespace: chaosgate
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: chaosgate
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: chaosgate
+  namespace: chaosgate
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: chaosgate
+---
+# Scrape config for the Prometheus Operator, if you run one.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chaosgate-scrape
+  namespace: chaosgate
+  labels:
+    app.kubernetes.io/name: chaosgate
+data:
+  scrape.yml: |
+    - job_name: chaosgate
+      metrics_path: /metrics
+      kubernetes_sd_configs:
+        - role: pod
+          namespaces:
+            names: [chaosgate]
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          action: keep
+          regex: "true"

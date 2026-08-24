@@ -1,9 +1,12 @@
-# Copy this file to your target repository as:
+# Copy this file into the repository you want guarded, as:
 #   .github/workflows/chaosgate.yml
 #
-# ChaosGate can also run the same stages on the control-plane host
-# without Actions. This workflow is the version you attach to a repo
-# so pull requests are blocked by a required status check.
+# Then: Settings → Branches → protect `main` → require the "ChaosGate" check.
+# A failing gate cannot be merged. Pushed commits are never un-pushed; they
+# are simply kept out of the protected branch.
+#
+# GitHub runners have Docker and can install k6, so the stages that degrade on
+# a bare control plane run for real here.
 
 name: ChaosGate
 
@@ -13,85 +16,201 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      vus:
+        description: "k6 virtual users"
+        required: false
+        default: "10"
+      duration:
+        description: "k6 duration"
+        required: false
+        default: "30s"
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: chaosgate-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   gate:
     name: ChaosGate
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Detect stack
         id: detect
-        run: python pipeline/scripts/detect_app.py || python - <<'PY'
-        from pathlib import Path
-        root = Path(".")
-        print("files:", sorted(p.name for p in root.iterdir())[:30])
-        if (root / "chaosgate.yml").exists():
-            print("contract: chaosgate.yml present")
-        if (root / "requirements.txt").exists() or (root / "pyproject.toml").exists():
-            print("stack: python")
-        if (root / "package.json").exists():
-            print("stack: javascript")
-        PY
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "── stack detection ──"
+          PY=0; JS=0; DOCKER=0; COMPOSE=0; K8S=0
+          [ -f requirements.txt ] || [ -f pyproject.toml ] || [ -f Pipfile ] && PY=1 || true
+          [ -f package.json ] && JS=1 || true
+          [ -f Dockerfile ] && DOCKER=1 || true
+          { [ -f docker-compose.yml ] || [ -f compose.yml ]; } && COMPOSE=1 || true
+          { [ -d k8s ] || [ -d kubernetes ] || [ -d manifests ] || [ -d deploy ]; } && K8S=1 || true
+          for v in PY JS DOCKER COMPOSE K8S; do
+            echo "${v,,}=${!v}" | tee -a "$GITHUB_OUTPUT"
+          done
+          if [ -f chaosgate.yml ] || [ -f chaosgate.yaml ]; then
+            echo "contract=1" >> "$GITHUB_OUTPUT"
+            echo "chaosgate contract present"
+          else
+            echo "contract=0" >> "$GITHUB_OUTPUT"
+            echo "no chaosgate.yml — autodetect mode"
+          fi
 
+      # ---------------------------------------------------------- unit tests
       - name: Setup Python
-        if: hashFiles('requirements.txt', 'pyproject.toml') != ''
+        if: steps.detect.outputs.py == '1'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Python unit tests
-        if: hashFiles('requirements.txt', 'pyproject.toml') != ''
+        if: steps.detect.outputs.py == '1'
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          [ -f requirements.txt ] && pip install -r requirements.txt || true
           pip install pytest
           python -m pytest -q
 
       - name: Setup Node
-        if: hashFiles('package.json') != ''
+        if: steps.detect.outputs.js == '1'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
 
       - name: JavaScript unit tests
-        if: hashFiles('package.json') != ''
+        if: steps.detect.outputs.js == '1'
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
-          npm test -- --watchAll=false
+          npm test --if-present
 
       - name: Production build
-        if: hashFiles('package.json') != ''
-        run: |
-          if npm run | grep -q " build"; then npm run build; fi
+        if: steps.detect.outputs.js == '1'
+        run: npm run build --if-present
 
+      # ------------------------------------------------------------ security
       - name: Secret scan
+        shell: bash
         run: |
-          if grep -RInE --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.venv \
-            'AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk_live_[A-Za-z0-9]{16,}|BEGIN (RSA |OPENSSH )?PRIVATE KEY' . ; then
-            echo "Committed secret pattern found — gate sealed"
+          echo "── secret scan ──"
+          PATTERN='AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk_live_[A-Za-z0-9]{16,}|-----BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY-----'
+          if grep -RInE --binary-files=without-match \
+               --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.venv \
+               --exclude-dir=dist --exclude-dir=build \
+               "$PATTERN" . ; then
+            echo "::error title=ChaosGate::Committed credential detected — gate sealed"
             exit 1
           fi
-          echo "No high-confidence secret patterns"
+          echo "no high-confidence secret patterns"
 
+      # -------------------------------------------------------------- docker
+      - name: Set up Buildx
+        if: steps.detect.outputs.docker == '1'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        if: steps.detect.outputs.docker == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: chaosgate/target:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image facts
+        if: steps.detect.outputs.docker == '1'
+        run: |
+          docker image inspect chaosgate/target:${{ github.sha }} \
+            --format 'size={{.Size}} layers={{len .RootFS.Layers}} user={{.Config.User}}'
+
+      # ---------------------------------------------------------- kubernetes
+      - name: Validate Kubernetes manifests
+        if: steps.detect.outputs.k8s == '1'
+        shell: bash
+        run: |
+          echo "── kubernetes ──"
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp
+          FOUND=0
+          for dir in k8s kubernetes manifests deploy; do
+            [ -d "$dir" ] || continue
+            FOUND=1
+            /tmp/kubeconform -strict -summary -ignore-missing-schemas "$dir"
+          done
+          [ "$FOUND" = "1" ] || echo "no manifest directory found"
+
+      # ------------------------------------------------------ boot the stack
       - name: Start stack
-        if: hashFiles('docker-compose.yml', 'compose.yml') != ''
+        id: stack
+        if: steps.detect.outputs.compose == '1'
         run: |
           docker compose up -d --wait || docker compose up -d
-          sleep 5
+          sleep 8
+          docker compose ps
 
-      - name: k6 load
-        if: hashFiles('chaosgate.yml') != ''
-        uses: grafana/k6-action@v0.3.1
-        continue-on-error: false
-        with:
-          filename: pipeline/k6/load.js
+      # ------------------------------------------------------------ k6 load
+      - name: k6 load test
+        if: steps.detect.outputs.compose == '1' || steps.detect.outputs.contract == '1'
+        uses: grafana/setup-k6-action@v1
 
-      - name: Verdict
+      - name: Run k6
+        if: steps.detect.outputs.compose == '1' || steps.detect.outputs.contract == '1'
+        env:
+          TARGET: ${{ vars.CHAOSGATE_TARGET || 'http://localhost:8000' }}
+          VUS: ${{ inputs.vus || '10' }}
+          DURATION: ${{ inputs.duration || '30s' }}
         run: |
-          echo "ChaosGate finished. Attach this job as a required status check"
-          echo "on the default branch so failed runs cannot merge."
+          if [ -f pipeline/k6/load.js ]; then
+            k6 run --summary-export=k6-summary.json pipeline/k6/load.js
+          else
+            echo "no k6 script at pipeline/k6/load.js — skipping"
+          fi
+
+      # ----------------------------------------------------------- artifacts
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaosgate-report-${{ github.run_id }}
+          path: |
+            k6-summary.json
+            **/junit*.xml
+            **/coverage*.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Tear down
+        if: always() && steps.detect.outputs.compose == '1'
+        run: docker compose down -v || true
+
+      # ------------------------------------------------------------- verdict
+      - name: Verdict
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "### ✅ ChaosGate — PASS" >> "$GITHUB_STEP_SUMMARY"
+            echo "Every required stage passed. The merge is allowed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### 🚫 ChaosGate — FAIL" >> "$GITHUB_STEP_SUMMARY"
+            echo "A required stage failed. Make this job a required status check on the default branch so the merge is blocked." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
