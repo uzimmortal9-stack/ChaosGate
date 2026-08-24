@@ -196,8 +196,8 @@
       </header>
       <section class="hero">
         <div>
-          <p class="kicker">Control plane · not a target app</p>
-          <h1>The gate<br><em>chaos</em><br>must pass.</h1>
+          <p class="kicker">Continuous Resilience and Security Gateway</p>
+          <h1>Deploy only<br>if it<br><em>survives</em></h1>
           <p class="lede">
             Connect GitHub, pick a repository, open its folder right here and edit it.
             Push, and the pipeline fires: unit tests, secret scan, a real container build,
