@@ -99,8 +99,8 @@ button {
   height: 380px;
   pointer-events: none;
   z-index: 1;
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 40%, rgba(0, 0, 0, 0) 100%);
-  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 40%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 48%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 48%, rgba(0, 0, 0, 0) 100%);
 }
 
 .aurora-wrap {
@@ -120,19 +120,19 @@ button {
 
 .orb-1 {
   top: -180px;
-  left: 12%;
+  left: 10%;
   width: 720px;
   height: 600px;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.22) 0%, rgba(99, 102, 241, 0) 70%);
+  background: radial-gradient(circle, rgba(255, 89, 56, 0.09) 0%, rgba(255, 89, 56, 0) 70%);
   animation: aurora-drift-1 26s ease-in-out infinite alternate;
 }
 
 .orb-2 {
-  top: 80px;
-  right: 10%;
-  width: 620px;
-  height: 520px;
-  background: radial-gradient(circle, rgba(20, 184, 166, 0.16) 0%, rgba(20, 184, 166, 0) 70%);
+  top: 60px;
+  right: 8%;
+  width: 650px;
+  height: 540px;
+  background: radial-gradient(circle, rgba(79, 110, 255, 0.11) 0%, rgba(79, 110, 255, 0) 70%);
   animation: aurora-drift-2 30s ease-in-out infinite alternate;
 }
 
@@ -141,7 +141,7 @@ button {
   left: 32%;
   width: 650px;
   height: 550px;
-  background: radial-gradient(circle, rgba(168, 85, 247, 0.12) 0%, rgba(168, 85, 247, 0) 70%);
+  background: radial-gradient(circle, rgba(255, 254, 250, 0.04) 0%, rgba(255, 254, 250, 0) 70%);
   animation: aurora-drift-3 22s ease-in-out infinite alternate;
 }
 
