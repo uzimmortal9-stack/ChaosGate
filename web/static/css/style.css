@@ -140,37 +140,25 @@ button {
 .brand-link {
   display: flex;
   align-items: center;
-  gap: 8px;
   padding-right: 14px;
   border-right: 1px solid rgba(200, 160, 255, 0.15);
   margin-right: 4px;
-  font-weight: 700;
-  font-size: 14px;
-  letter-spacing: -0.015em;
-  color: var(--text-main);
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, filter 0.25s;
 }
 
 .brand-link:hover {
   opacity: 0.95;
-}
-
-.brand-link:hover .logo-core-star {
-  filter: drop-shadow(0 0 8px #c084fc);
-  transform: scale(1.18);
-}
-
-.logo-core-star {
-  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
-  transform-origin: 32px 32px;
+  filter: drop-shadow(0 0 10px rgba(196, 178, 255, 0.5));
 }
 
 .chaos-logo {
+  display: block;
   flex-shrink: 0;
+  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.brand-name {
-  color: var(--text-main);
+.brand-link:hover .chaos-logo {
+  transform: translateY(-0.5px);
 }
 
 .nav-pill-links {
@@ -219,8 +207,9 @@ button {
     padding: 6px 10px;
     gap: 2px;
   }
-  .brand-name, .nav-pill-status {
-    display: none;
+  .chaos-logo {
+    width: 96px;
+    height: 21px;
   }
   .nav-pill-item {
     padding: 5px 9px;

@@ -1,20 +1,42 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <linearGradient id="gate-grad" x1="12" y1="8" x2="52" y2="56" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#38bdf8"/>
-      <stop offset="50%" stop-color="#818cf8"/>
-      <stop offset="100%" stop-color="#c084fc"/>
+    <linearGradient id="cg" gradientUnits="userSpaceOnUse" x1="4" y1="4" x2="60" y2="60">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#f2edff"/>
+      <stop offset="1" stop-color="#c4b2ff"/>
     </linearGradient>
-    <linearGradient id="star-glow" x1="32" y1="18" x2="32" y2="46" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="50%" stop-color="#38bdf8"/>
-      <stop offset="100%" stop-color="#2dd4bf"/>
-    </linearGradient>
+    <clipPath id="half"><rect x="27" y="0" width="64" height="64"/></clipPath>
+    <mask id="gate"><rect width="64" height="64" fill="#fff"/><path d="M30 46 V31 a7 7 0 0 1 14 0 V46 Z" fill="#000"/></mask>
   </defs>
-  <rect width="64" height="64" rx="18" fill="#0d0f17" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
-  <rect x="1" y="1" width="62" height="62" rx="17" fill="none" stroke="url(#gate-grad)" stroke-width="0.8" stroke-opacity="0.3"/>
-  <path d="M22 14 L30 14 L30 20 L24 20 L24 44 L30 44 L30 50 L22 50 C18.7 50 16 47.3 16 44 L16 20 C16 16.7 18.7 14 22 14 Z" fill="url(#gate-grad)"/>
-  <path d="M42 14 L34 14 L34 20 L40 20 L40 44 L34 44 L34 50 L42 50 C45.3 50 48 47.3 48 44 L48 20 C48 16.7 45.3 14 42 14 Z" fill="url(#gate-grad)"/>
-  <path d="M32 18 L34.8 28.5 L44 32 L34.8 35.5 L32 46 L29.2 35.5 L20 32 L29.2 28.5 Z" fill="url(#star-glow)"/>
-  <circle cx="32" cy="32" r="2.8" fill="#ffffff"/>
+  <g fill="url(#cg)" mask="url(#gate)">
+    <circle cx="33" cy="32" r="24" clip-path="url(#half)"/>
+    <rect x="23.77" y="8.59" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.79" y="12.12" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.78" y="15.73" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.88" y="19.25" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.72" y="22.94" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.68" y="26.60" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.76" y="30.02" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.78" y="33.60" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.84" y="37.19" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.80" y="40.97" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.76" y="44.50" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="23.80" y="48.05" width="2.61" height="2.61" rx="0.6"/>
+    <rect x="20.24" y="22.85" width="2.42" height="2.42" rx="0.6"/>
+    <rect x="19.89" y="26.53" width="2.42" height="2.42" rx="0.6"/>
+    <rect x="19.76" y="34.02" width="2.42" height="2.42" rx="0.6"/>
+    <rect x="20.25" y="37.66" width="2.42" height="2.42" rx="0.6"/>
+    <rect x="19.74" y="40.92" width="2.42" height="2.42" rx="0.6"/>
+    <rect x="19.98" y="44.78" width="2.42" height="2.42" rx="0.6"/>
+    <rect x="20.33" y="48.08" width="2.42" height="2.42" rx="0.6"/>
+    <rect x="16.62" y="22.65" width="2.23" height="2.23" rx="0.6"/>
+    <rect x="16.01" y="26.33" width="2.23" height="2.23" rx="0.6"/>
+    <rect x="16.68" y="34.14" width="2.23" height="2.23" rx="0.6"/>
+    <rect x="16.18" y="37.06" width="2.23" height="2.23" rx="0.6"/>
+    <rect x="16.65" y="40.83" width="2.23" height="2.23" rx="0.6"/>
+    <rect x="12.02" y="19.14" width="2.04" height="2.04" rx="0.6"/>
+    <rect x="11.86" y="33.54" width="2.04" height="2.04" rx="0.6"/>
+    <rect x="12.19" y="37.32" width="2.04" height="2.04" rx="0.6"/>
+    <rect x="13.27" y="40.55" width="2.04" height="2.04" rx="0.6"/>
+  </g>
 </svg>
