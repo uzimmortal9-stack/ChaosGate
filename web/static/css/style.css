@@ -89,8 +89,18 @@ button {
 }
 
 /* --------------------------------------------------------------------------
-   Ambient Aurora & Blueprint Dot Pattern (Hardware-Accelerated Living Depth)
+   Ambient 3D Halftone Dither Canvas & Aurora Atmosphere
    -------------------------------------------------------------------------- */
+.ambient-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.38;
+}
+
 .aurora-wrap {
   position: fixed;
   inset: 0;
