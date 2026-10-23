@@ -1,197 +1,232 @@
 /**
- * ChaosGate Ambient Background Engine — Real-Time Procedural Cloudy Sky
- * High-performance WebGL GLSL shader rendering organic volumetric clouds
- * drifting across a luminous daylight atmosphere (Hark Pro light-mode aesthetic).
+ * ChaosGate Ambient Background Engine — Dark Twilight Procedural Cloud Sky
+ * Ported directly from index (3).html WebGL GLSL Shader
+ * Deep midnight cosmic purple, domain-warped clouds, twilight horizon glow, and floating starlight motes.
  */
 (() => {
   const canvas = document.getElementById("ambient-canvas");
   if (!canvas) return;
 
   const gl = canvas.getContext("webgl", {
-    alpha: false,
-    depth: false,
     antialias: false,
+    preserveDrawingBuffer: false,
     powerPreference: "high-performance"
   });
 
   if (!gl) {
-    // Graceful 2D canvas fallback
-    render2DFallback(canvas);
+    document.body.style.background = "linear-gradient(#0c0617,#1e0b35 55%,#3d1246)";
     return;
   }
 
   const vsSource = `
-    attribute vec2 position;
+    attribute vec2 a;
     void main() {
-      gl_Position = vec4(position, 0.0, 1.0);
+      gl_Position = vec4(a, 0.0, 1.0);
     }
   `;
 
   const fsSource = `
     precision highp float;
-    uniform vec2 uRes;
+    uniform vec2  uRes;
     uniform float uTime;
-    uniform vec2 uMouse;
+    uniform vec2  uMouse;
 
-    float hash21(vec2 p) {
-      vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-      p3 += dot(p3, p3.yzx + 33.33);
-      return fract((p3.x + p3.y) * p3.z);
+    // ---------- noise ----------
+    float hash(vec2 p) {
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
     }
-
-    // Quintic smoothed value noise for silky cloud transitions
-    float vnoise(vec2 p) {
-      vec2 i = floor(p);
-      vec2 f = fract(p);
-      vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-      float a = hash21(i);
-      float b = hash21(i + vec2(1.0, 0.0));
-      float c = hash21(i + vec2(0.0, 1.0));
-      float d = hash21(i + vec2(1.0, 1.0));
+    float noise(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      float a = hash(i), b = hash(i + vec2(1,0)), c = hash(i + vec2(0,1)), d = hash(i + vec2(1,1));
       return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
     }
-
-    // 4-octave rotating Fractional Brownian Motion
+    const mat2 ROT = mat2(0.80, 0.60, -0.60, 0.80);
     float fbm(vec2 p) {
-      float v = 0.0;
-      float a = 0.52;
-      mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
-      for (int i = 0; i < 4; i++) {
-        v += a * vnoise(p);
-        p = rot * p * 2.02;
-        a *= 0.48;
+      float v = 0.0, a = 0.5;
+      for (int i = 0; i < 5; i++) {
+        v += a * noise(p);
+        p = ROT * p * 2.03 + 1.7;
+        a *= 0.5;
       }
       return v;
     }
+    // domain-warped fbm -> soft, billowy, painterly cloud shapes
+    float clouds(vec2 p, float t) {
+      vec2 q = vec2(fbm(p + vec2(0.0, t * 0.05)), fbm(p + vec2(5.2, 1.3) - t * 0.03));
+      vec2 r = vec2(fbm(p + 1.4 * q + vec2(1.7, 9.2) + t * 0.04), fbm(p + 1.4 * q + vec2(8.3, 2.8)));
+      return fbm(p + 1.1 * r);
+    }
+
+    // ---------- grass blades ----------
+    float blade(vec2 uv, float x0, float h, float bend, float w, float t, float seed) {
+      float y = uv.y;
+      if (y > h) return 0.0;
+      float k = y / h;
+      float sway = sin(t * 0.9 + seed * 6.0) * 0.012 + sin(t * 2.1 + seed * 13.0) * 0.004;
+      float cx = x0 + (bend + sway) * k * k;
+      float width = w * (1.0 - k);
+      float d = abs(uv.x - cx);
+      return smoothstep(width + 0.004, width - 0.001, d) * (0.55 + 0.45 * hash(vec2(seed, 1.0)));
+    }
 
     void main() {
-      vec2 uv = gl_FragCoord.xy / uRes;
+      vec2 frag = gl_FragCoord.xy;
+      vec2 uv = frag / uRes;                       // 0..1, y up
       float aspect = uRes.x / uRes.y;
-      vec2 p = vec2(uv.x * aspect, uv.y);
+      vec2 mOffset = (uMouse / uRes - 0.5) * 0.035;
+      vec2 p = vec2(uv.x * aspect, uv.y) + mOffset;
+      float t = uTime;
 
-      // Slow cinematic atmospheric wind drift
-      float t = uTime * 0.032;
-      vec2 drift = vec2(t * 0.42, t * 0.10);
+      // ---------- base dark purple twilight gradient ----------
+      vec3 top     = vec3(0.040, 0.018, 0.090); // deep midnight cosmic purple
+      vec3 mid     = vec3(0.120, 0.050, 0.230); // deep royal violet
+      vec3 low     = vec3(0.240, 0.090, 0.380); // dark amethyst twilight
+      vec3 horizon = vec3(0.540, 0.170, 0.500); // glowing magenta-violet twilight horizon
+      vec3 col = mix(low, mid, smoothstep(0.05, 0.55, uv.y));
+      col = mix(col, top, smoothstep(0.55, 1.05, uv.y));
 
-      // Subtle interactive mouse parallax
-      vec2 mOffset = (uMouse / uRes - 0.5) * 0.06;
-      p += mOffset;
+      // warm deep purple glow from lower-left (where the sun has set)
+      vec2 sunPos = vec2(-0.05 * aspect, 0.18);
+      float sunD = length((p - sunPos) * vec2(0.8, 1.4));
+      float glow = exp(-sunD * 1.6);
+      col = mix(col, horizon, glow * 0.75);
+      // a second, softer purple-magenta band low on the right
+      col = mix(col, vec3(0.42, 0.12, 0.44), exp(-length((p - vec2(aspect * 1.05, 0.05)) * vec2(0.9, 2.4)) * 1.8) * 0.45);
 
-      // Domain warping for natural billowing cumulus clouds
-      vec2 q = vec2(
-        fbm(p * 1.15 + drift),
-        fbm(p * 1.15 + vec2(5.2, 1.3) - drift * 0.65)
-      );
-      vec2 r = vec2(
-        fbm(p * 1.45 + 1.2 * q + vec2(1.7, 9.2) + t * 0.04),
-        fbm(p * 1.45 + 1.2 * q + vec2(8.3, 2.8) - t * 0.035)
-      );
-      float cloudDensity = fbm(p * 1.05 + 0.9 * r);
+      // ---------- cloud layers ----------
+      // 1) high wispy streaks (stretched horizontally)
+      vec2 wp = vec2(p.x * 0.9 + t * 0.010, p.y * 3.2);
+      float wisps = clouds(wp * 0.9, t);
+      wisps = smoothstep(0.40, 0.68, wisps) * smoothstep(0.40, 0.95, uv.y);
 
-      // Daytime Sky Rayleigh Scattering Gradient
-      vec3 skyZenith  = vec3(0.72, 0.85, 0.98); // Soft sky azure
-      vec3 skyMid     = vec3(0.88, 0.93, 0.99); // Crisp daylight
-      vec3 skyHorizon = vec3(0.96, 0.97, 0.99); // Warm ivory horizon
+      // 2) main mid-level billows
+      vec2 cp = vec2(p.x * 1.1 + t * 0.018, p.y * 1.9 - 0.3);
+      float c = clouds(cp * 0.75, t);
+      float lowMask = smoothstep(0.85, 0.15, uv.y);          // denser near the bottom
+      float density = smoothstep(0.34, 0.62, c + lowMask * 0.18 - smoothstep(0.6, 1.0, uv.y) * 0.08);
 
-      vec3 sky = mix(skyHorizon, skyMid, smoothstep(0.0, 0.45, uv.y));
-      sky = mix(sky, skyZenith, smoothstep(0.40, 1.0, uv.y));
+      // 3) big soft foreground clouds sweeping in from the bottom-left
+      vec2 bp = vec2(p.x * 0.7 + t * 0.026, p.y * 1.3);
+      float big = clouds(bp * 0.6 + 10.0, t * 0.7);
+      float bigMask = smoothstep(0.6, 0.0, uv.y) * (0.65 + 0.35 * smoothstep(0.8 * aspect, 0.0, p.x));
+      float bigD = smoothstep(0.30, 0.56, big) * bigMask;
 
-      // Atmospheric Sun Glow
-      vec2 sunPos = vec2(0.68 * aspect, 0.82) + mOffset * 0.5;
-      float sunDist = length(p - sunPos);
-      float sunGlow = exp(-sunDist * 1.5) * 0.32;
-      vec3 sunColor = vec3(1.0, 0.97, 0.92);
-      sky += sunGlow * sunColor;
+      // lighting: fake self-shadow by sampling the field toward the light
+      vec2 lightDir = normalize(sunPos - p) * 0.06;
+      float cs = clouds((cp + lightDir) * 0.75, t);
+      float shade = clamp((c - cs) * 7.0 + 0.45 + density * 0.25, 0.0, 1.0);    // >0.5 means lit edge
 
-      // Volumetric Cloud Shading: Sunlit tops vs soft ambient underside shadows
-      float cloudCut = smoothstep(0.38, 0.78, cloudDensity);
-      vec3 cloudBase = vec3(0.93, 0.95, 0.98); // Ambient underside shadow
-      vec3 cloudLit  = vec3(1.0, 1.0, 1.0);     // Pure sunlit cloud white
+      vec3 cloudShadow = vec3(0.080, 0.040, 0.160); // deep dark purple-indigo shadow
+      vec3 cloudLit    = vec3(0.740, 0.540, 0.940); // luminous lavender-violet crests
+      vec3 cloudPink   = vec3(0.840, 0.300, 0.720); // neon violet-magenta rim
+      float warm = clamp(glow * 1.6, 0.0, 1.0);
+      vec3 cloudCol = mix(cloudShadow, mix(cloudLit, cloudPink, warm), shade);
 
-      float sunLighting = smoothstep(0.40, 0.76, fbm(p * 1.28 + q - sunPos * 0.2));
-      vec3 cloudCol = mix(cloudBase, cloudLit, sunLighting * 0.85 + 0.15);
+      col = mix(col, mix(vec3(0.26, 0.12, 0.44), cloudLit, 0.35), wisps * 0.45);
+      col = mix(col, cloudCol, density * 0.85);
 
-      // Atmospheric haze blending
-      vec3 finalColor = mix(sky, cloudCol, cloudCut * 0.72);
+      float bs = clouds((bp + lightDir) * 0.6 + 10.0, t * 0.7);
+      float bshade = clamp((big - bs) * 7.0 + 0.5 + bigD * 0.3, 0.0, 1.0);
+      vec3 bigCol = mix(vec3(0.06, 0.030, 0.13), mix(vec3(0.66, 0.28, 0.70), cloudPink, warm), bshade);
+      col = mix(col, bigCol, bigD * 0.9);
 
-      // High-frequency subtle dithering to prevent display banding
-      float grain = (hash21(gl_FragCoord.xy + fract(uTime)) - 0.5) * (1.0 / 255.0);
-      finalColor += grain;
+      // ---------- tiny floating light motes ----------
+      for (int i = 0; i < 5; i++) {
+        float fi = float(i);
+        vec2 m = vec2(0.210, 0.867);
+        if (i == 1) m = vec2(0.2035, 0.848);
+        if (i == 2) m = vec2(0.186, 0.833);
+        if (i == 3) m = vec2(0.1655, 0.812);
+        if (i == 4) m = vec2(0.197, 0.789);
+        m.y += sin(t * 0.6 + fi) * 0.006;
+        m.x *= aspect;
+        float d = length(p - m);
+        float r = 0.0045 + 0.002 * hash(vec2(fi, 3.0));
+        col += vec3(0.92, 0.78, 1.00) * smoothstep(r, r * 0.3, d) * 0.9;
+        col += vec3(0.95, 0.55, 0.92) * exp(-d * 180.0) * 0.15;
+      }
 
-      gl_FragColor = vec4(finalColor, 1.0);
+      // ---------- out-of-focus grass in the corners ----------
+      float g = 0.0;
+      for (int i = 0; i < 26; i++) {
+        float fi = float(i);
+        float s = hash(vec2(fi, 7.1));
+        g = max(g, blade(vec2(uv.x, uv.y), 0.01 + s * 0.13, 0.10 + hash(vec2(fi, 2.0)) * 0.22,
+                         (hash(vec2(fi, 4.0)) - 0.3) * 0.12, 0.0025 + s * 0.004, t, s));
+        g = max(g, blade(vec2(uv.x, uv.y), 0.86 + s * 0.14, 0.12 + hash(vec2(fi, 9.0)) * 0.28,
+                         (hash(vec2(fi, 5.0)) - 0.6) * 0.14, 0.0025 + s * 0.0045, t, s + 1.0));
+      }
+      vec3 grassCol = mix(vec3(0.035, 0.015, 0.065), vec3(0.15, 0.05, 0.17), smoothstep(0.0, 0.3, uv.y));
+      col = mix(col, grassCol, g * 0.75);
+
+      // ---------- atmosphere & finishing ----------
+      col = mix(col, vec3(0.20, 0.07, 0.26), smoothstep(0.30, 0.0, uv.y) * 0.15);
+      vec2 v = uv - 0.5;
+      col *= 1.0 - dot(v, v) * 0.55;
+      col = pow(col, vec3(0.95));
+      col += (hash(frag + fract(t) * 100.0) - 0.5) * 0.018;
+
+      gl_FragColor = vec4(col, 1.0);
     }
   `;
 
-  function createShader(gl, type, source) {
+  const sh = (type, src) => {
     const s = gl.createShader(type);
-    gl.shaderSource(s, source);
+    gl.shaderSource(s, src);
     gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
       console.error(gl.getShaderInfoLog(s));
-      gl.deleteShader(s);
       return null;
     }
     return s;
-  }
+  };
 
-  const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
-  const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+  const vs = sh(gl.VERTEX_SHADER, vsSource);
+  const fs = sh(gl.FRAGMENT_SHADER, fsSource);
   if (!vs || !fs) return;
 
-  const program = gl.createProgram();
-  gl.attachShader(program, vs);
-  gl.attachShader(program, fs);
-  gl.linkProgram(program);
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
 
-  const posLoc = gl.getAttribLocation(program, "position");
-  const resLoc = gl.getUniformLocation(program, "uRes");
-  const timeLoc = gl.getUniformLocation(program, "uTime");
-  const mouseLoc = gl.getUniformLocation(program, "uMouse");
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
 
-  const posBuf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-    -1, -1,
-     1, -1,
-    -1,  1,
-    -1,  1,
-     1, -1,
-     1,  1
-  ]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, "a");
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 
-  let width = 0;
-  let height = 0;
+  const uRes = gl.getUniformLocation(prog, "uRes");
+  const uTime = gl.getUniformLocation(prog, "uTime");
+  const uMouse = gl.getUniformLocation(prog, "uMouse");
+
+  const SCALE = 0.75;
   let isVisible = true;
   let animId = null;
 
   const mouse = {
-    x: 720,
-    y: 360,
-    targetX: 720,
-    targetY: 360
+    x: window.innerWidth * 0.5,
+    y: window.innerHeight * 0.5,
+    targetX: window.innerWidth * 0.5,
+    targetY: window.innerHeight * 0.5
   };
 
   function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-    width = window.innerWidth;
-    height = window.innerHeight;
-    canvas.width = Math.floor(width * dpr);
-    canvas.height = Math.floor(height * dpr);
-    canvas.style.width = width + "px";
-    canvas.style.height = height + "px";
+    const dpr = Math.min(window.devicePixelRatio || 1, 2) * SCALE;
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    canvas.style.width = window.innerWidth + "px";
+    canvas.style.height = window.innerHeight + "px";
     gl.viewport(0, 0, canvas.width, canvas.height);
-
-    if (!mouse.hasMoved) {
-      mouse.targetX = width * 0.5;
-      mouse.targetY = height * 0.4;
-      mouse.x = mouse.targetX;
-      mouse.y = mouse.targetY;
-    }
   }
 
   window.addEventListener("resize", resize, { passive: true });
   window.addEventListener("pointermove", (e) => {
-    mouse.hasMoved = true;
     mouse.targetX = e.clientX;
     mouse.targetY = e.clientY;
   }, { passive: true });
@@ -199,56 +234,31 @@
   document.addEventListener("visibilitychange", () => {
     isVisible = !document.hidden;
     if (isVisible && !animId) {
-      animId = requestAnimationFrame(render);
+      animId = requestAnimationFrame(frame);
     }
   });
 
   resize();
 
-  const startTime = performance.now();
+  const t0 = performance.now();
 
-  function render(now) {
+  function frame(now) {
     if (!isVisible) {
       animId = null;
       return;
     }
 
-    const elapsed = (now - startTime) * 0.001;
-
     mouse.x += (mouse.targetX - mouse.x) * 0.04;
     mouse.y += (mouse.targetY - mouse.y) * 0.04;
 
-    gl.useProgram(program);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTime, (now - t0) / 1000);
+    gl.uniform2f(uMouse, mouse.x * (canvas.width / window.innerWidth), (window.innerHeight - mouse.y) * (canvas.height / window.innerHeight));
 
-    gl.enableVertexAttribArray(posLoc);
-    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-    gl.uniform2f(resLoc, canvas.width, canvas.height);
-    gl.uniform1f(timeLoc, elapsed);
-    gl.uniform2f(mouseLoc, mouse.x * (canvas.width / width), (height - mouse.y) * (canvas.height / height));
-
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-
-    animId = requestAnimationFrame(render);
+    animId = requestAnimationFrame(frame);
   }
 
-  animId = requestAnimationFrame(render);
-
-  function render2DFallback(cvs) {
-    const ctx = cvs.getContext("2d");
-    if (!ctx) return;
-    function draw() {
-      cvs.width = window.innerWidth;
-      cvs.height = window.innerHeight;
-      const grad = ctx.createLinearGradient(0, 0, 0, cvs.height);
-      grad.addColorStop(0, "#b8d8fa");
-      grad.addColorStop(0.5, "#e0edfc");
-      grad.addColorStop(1, "#f5f7fc");
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, cvs.width, cvs.height);
-    }
-    window.addEventListener("resize", draw);
-    draw();
-  }
+  animId = requestAnimationFrame(frame);
 })();
