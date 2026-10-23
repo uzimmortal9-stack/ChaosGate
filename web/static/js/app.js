@@ -150,16 +150,30 @@
       </div>`;
   }
 
-  function Verdict(conclusion) {
-    const pass = conclusion === "PASS";
-    const isRun = conclusion === "running" || conclusion === "queued";
-    if (isRun) {
-      return `<span class="verdict verdict-run"><span class="verdict-dot bg-indigo-400"></span>Running</span>`;
+  const STATUS_SVGS = {
+    passed: `<svg viewBox="0 0 16 16"><circle cx="1.6" cy="1.6" r=".75"/><circle cx="4.8" cy="1.6" r=".75"/><circle cx="8.0" cy="1.6" r=".75"/><circle cx="11.2" cy="1.6" r=".75"/><circle cx="14.4" cy="1.6" r=".75"/><circle cx="1.6" cy="4.8" r=".75"/><circle cx="4.8" cy="4.8" r=".75"/><circle cx="8.0" cy="4.8" r=".75"/><circle cx="11.2" cy="4.8" r=".75"/><circle class="on" cx="14.4" cy="4.8" r="1.15" style="--i:5"/><circle cx="1.6" cy="8.0" r=".75"/><circle cx="4.8" cy="8.0" r=".75"/><circle cx="8.0" cy="8.0" r=".75"/><circle class="on" cx="11.2" cy="8.0" r="1.15" style="--i:5"/><circle cx="14.4" cy="8.0" r=".75"/><circle class="on" cx="1.6" cy="11.2" r="1.15" style="--i:3"/><circle cx="4.8" cy="11.2" r=".75"/><circle class="on" cx="8.0" cy="11.2" r="1.15" style="--i:5"/><circle cx="11.2" cy="11.2" r=".75"/><circle cx="14.4" cy="11.2" r=".75"/><circle cx="1.6" cy="14.4" r=".75"/><circle class="on" cx="4.8" cy="14.4" r="1.15" style="--i:5"/><circle cx="8.0" cy="14.4" r=".75"/><circle cx="11.2" cy="14.4" r=".75"/><circle cx="14.4" cy="14.4" r=".75"/></svg>`,
+    blocked: `<svg viewBox="0 0 16 16"><circle class="on" cx="1.6" cy="1.6" r="1.15" style="--i:0"/><circle cx="4.8" cy="1.6" r=".75"/><circle cx="8.0" cy="1.6" r=".75"/><circle cx="11.2" cy="1.6" r=".75"/><circle class="on" cx="14.4" cy="1.6" r="1.15" style="--i:4"/><circle cx="1.6" cy="4.8" r=".75"/><circle class="on" cx="4.8" cy="4.8" r="1.15" style="--i:2"/><circle cx="8.0" cy="4.8" r=".75"/><circle class="on" cx="11.2" cy="4.8" r="1.15" style="--i:4"/><circle cx="14.4" cy="4.8" r=".75"/><circle cx="1.6" cy="8.0" r=".75"/><circle cx="4.8" cy="8.0" r=".75"/><circle class="on" cx="8.0" cy="8.0" r="1.15" style="--i:4"/><circle cx="11.2" cy="8.0" r=".75"/><circle cx="14.4" cy="8.0" r=".75"/><circle cx="1.6" cy="11.2" r=".75"/><circle class="on" cx="4.8" cy="11.2" r="1.15" style="--i:4"/><circle cx="8.0" cy="11.2" r=".75"/><circle class="on" cx="11.2" cy="11.2" r="1.15" style="--i:6"/><circle cx="14.4" cy="11.2" r=".75"/><circle class="on" cx="1.6" cy="14.4" r="1.15" style="--i:4"/><circle cx="4.8" cy="14.4" r=".75"/><circle cx="8.0" cy="14.4" r=".75"/><circle cx="11.2" cy="14.4" r=".75"/><circle class="on" cx="14.4" cy="14.4" r="1.15" style="--i:8"/></svg>`,
+    running: `<svg viewBox="0 0 16 16"><circle class="on" cx="1.6" cy="1.6" r="1.15" style="--i:0"/><circle class="on" cx="4.8" cy="1.6" r="1.15" style="--i:1"/><circle class="on" cx="8.0" cy="1.6" r="1.15" style="--i:2"/><circle class="on" cx="11.2" cy="1.6" r="1.15" style="--i:3"/><circle class="on" cx="14.4" cy="1.6" r="1.15" style="--i:4"/><circle class="on" cx="1.6" cy="4.8" r="1.15" style="--i:15"/><circle cx="4.8" cy="4.8" r=".75"/><circle cx="8.0" cy="4.8" r=".75"/><circle cx="11.2" cy="4.8" r=".75"/><circle class="on" cx="14.4" cy="4.8" r="1.15" style="--i:5"/><circle class="on" cx="1.6" cy="8.0" r="1.15" style="--i:14"/><circle cx="4.8" cy="8.0" r=".75"/><circle cx="8.0" cy="8.0" r=".75"/><circle cx="11.2" cy="8.0" r=".75"/><circle class="on" cx="14.4" cy="8.0" r="1.15" style="--i:6"/><circle class="on" cx="1.6" cy="11.2" r="1.15" style="--i:13"/><circle cx="4.8" cy="11.2" r=".75"/><circle cx="8.0" cy="11.2" r=".75"/><circle cx="11.2" cy="11.2" r=".75"/><circle class="on" cx="14.4" cy="11.2" r="1.15" style="--i:7"/><circle class="on" cx="1.6" cy="14.4" r="1.15" style="--i:12"/><circle class="on" cx="4.8" cy="14.4" r="1.15" style="--i:11"/><circle class="on" cx="8.0" cy="14.4" r="1.15" style="--i:10"/><circle class="on" cx="11.2" cy="14.4" r="1.15" style="--i:9"/><circle class="on" cx="14.4" cy="14.4" r="1.15" style="--i:8"/></svg>`,
+    warning: `<svg viewBox="0 0 16 16"><circle cx="1.6" cy="1.6" r=".75"/><circle cx="4.8" cy="1.6" r=".75"/><circle class="on" cx="8.0" cy="1.6" r="1.15" style="--i:2"/><circle cx="11.2" cy="1.6" r=".75"/><circle cx="14.4" cy="1.6" r=".75"/><circle cx="1.6" cy="4.8" r=".75"/><circle cx="4.8" cy="4.8" r=".75"/><circle class="on" cx="8.0" cy="4.8" r="1.15" style="--i:3"/><circle cx="11.2" cy="4.8" r=".75"/><circle cx="14.4" cy="4.8" r=".75"/><circle cx="1.6" cy="8.0" r=".75"/><circle cx="4.8" cy="8.0" r=".75"/><circle class="on" cx="8.0" cy="8.0" r="1.15" style="--i:4"/><circle cx="11.2" cy="8.0" r=".75"/><circle cx="14.4" cy="8.0" r=".75"/><circle cx="1.6" cy="11.2" r=".75"/><circle cx="4.8" cy="11.2" r=".75"/><circle cx="8.0" cy="11.2" r=".75"/><circle cx="11.2" cy="11.2" r=".75"/><circle cx="14.4" cy="11.2" r=".75"/><circle cx="1.6" cy="14.4" r=".75"/><circle cx="4.8" cy="14.4" r=".75"/><circle class="on" cx="8.0" cy="14.4" r="1.15" style="--i:6"/><circle cx="11.2" cy="14.4" r=".75"/><circle cx="14.4" cy="14.4" r=".75"/></svg>`,
+    rolled: `<svg viewBox="0 0 16 16"><circle cx="1.6" cy="1.6" r=".75"/><circle cx="4.8" cy="1.6" r=".75"/><circle class="on" cx="8.0" cy="1.6" r="1.15" style="--i:2"/><circle cx="11.2" cy="1.6" r=".75"/><circle cx="14.4" cy="1.6" r=".75"/><circle cx="1.6" cy="4.8" r=".75"/><circle class="on" cx="4.8" cy="4.8" r="1.15" style="--i:2"/><circle cx="8.0" cy="4.8" r=".75"/><circle cx="11.2" cy="4.8" r=".75"/><circle cx="14.4" cy="4.8" r=".75"/><circle class="on" cx="1.6" cy="8.0" r="1.15" style="--i:2"/><circle class="on" cx="4.8" cy="8.0" r="1.15" style="--i:3"/><circle class="on" cx="8.0" cy="8.0" r="1.15" style="--i:4"/><circle class="on" cx="11.2" cy="8.0" r="1.15" style="--i:5"/><circle class="on" cx="14.4" cy="8.0" r="1.15" style="--i:6"/><circle cx="1.6" cy="11.2" r=".75"/><circle class="on" cx="4.8" cy="11.2" r="1.15" style="--i:4"/><circle cx="8.0" cy="11.2" r=".75"/><circle cx="11.2" cy="11.2" r=".75"/><circle cx="14.4" cy="11.2" r=".75"/><circle cx="1.6" cy="14.4" r=".75"/><circle cx="4.8" cy="14.4" r=".75"/><circle class="on" cx="8.0" cy="14.4" r="1.15" style="--i:6"/><circle cx="11.2" cy="14.4" r=".75"/><circle cx="14.4" cy="14.4" r=".75"/></svg>`,
+    chevron: `<svg class="go" viewBox="0 0 16 16"><circle cx="4.8" cy="1.6" r="1.15"/><circle cx="8.0" cy="4.8" r="1.15"/><circle cx="11.2" cy="8.0" r="1.15"/><circle cx="8.0" cy="11.2" r="1.15"/><circle cx="4.8" cy="14.4" r="1.15"/></svg>`
+  };
+
+  function Verdict(conclusion, customLabel = null) {
+    const s = String(conclusion || "").toUpperCase();
+    if (s === "PASS" || s === "PASSED" || s === "SUCCESS") {
+      return `<span class="st passed">${STATUS_SVGS.passed}${customLabel || "Passed"}</span>`;
     }
-    return `<span class="verdict ${pass ? "verdict-pass" : "verdict-fail"}">
-      <span class="verdict-dot ${pass ? "bg-emerald-400" : "bg-rose-400"}"></span>
-      ${pass ? "Passed" : "Blocked"}
-    </span>`;
+    if (s === "RUNNING" || s === "QUEUED" || s === "PENDING" || s === "IN_PROGRESS") {
+      return `<span class="st running">${STATUS_SVGS.running}${customLabel || "Running"}</span>`;
+    }
+    if (s === "DEGRADED" || s === "WARNING" || s === "AT_RISK" || s === "WARN") {
+      return `<span class="st warning">${STATUS_SVGS.warning}${customLabel || "At risk"}</span>`;
+    }
+    if (s === "ROLLBACK" || s === "ROLLED_BACK" || s === "ROLLED") {
+      return `<span class="st rolled">${STATUS_SVGS.rolled}${customLabel || "Rolled back"}</span>`;
+    }
+    return `<span class="st blocked">${STATUS_SVGS.blocked}${customLabel || "Blocked"}</span>`;
   }
 
   // Floating Pill Top Navigation
@@ -382,7 +396,7 @@
                 </p>
               </div>
               ${Verdict(r.conclusion || r.status)}
-              <span class="run-arrow">→</span>
+              ${STATUS_SVGS.chevron}
             </a>
           </li>
         `).join("")}
@@ -521,7 +535,7 @@
                   <strong style="font-size:14.5px;">${esc(currentStage.name || currentStage.key)}</strong>
                   <span style="font-size:12px; color:var(--text-dim);">${esc(currentStage.key)} · ${currentStage.duration_ms ? `${(currentStage.duration_ms / 1000).toFixed(2)}s` : "completed"}</span>
                 </div>
-                <span class="verdict ${currentStage.status === "passed" ? "verdict-pass" : "verdict-fail"}">${(currentStage.status || "ready").toUpperCase()}</span>
+                ${Verdict(currentStage.status, (currentStage.status || "ready").toUpperCase())}
               </div>
               <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">${esc(currentStage.summary || "Stage completed.")}</p>
               ${currentStage.metrics && Object.keys(currentStage.metrics).length > 0 ? `
@@ -756,7 +770,7 @@
             ${Object.entries(tools).map(([name, t]) => `
               <div class="glass" style="padding:12px 16px; display:flex; justify-content:space-between; align-items:center; border-radius:var(--radius-md);">
                 <strong style="font-size:13.5px;">${esc(name)}</strong>
-                <span class="verdict ${t.available ? "verdict-pass" : "verdict-fail"}">${t.available ? "Ready" : "Degraded"}</span>
+                ${t.available ? Verdict("PASS", "Ready") : Verdict("DEGRADED", "Degraded")}
               </div>
             `).join("")}
           </div>

@@ -468,8 +468,93 @@ button {
 }
 
 /* --------------------------------------------------------------------------
-   Verdicts & Circular SVG Score Ring
+   Verdicts, Dot-Matrix Status Badges (.st) & Kinetic Row Chevron (.go)
    -------------------------------------------------------------------------- */
+.st {
+  --c: #8b8b98;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 10px 0 6px;
+  min-width: 108px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--c) 14%, transparent), color-mix(in srgb, var(--c) 3%, transparent));
+  box-shadow: inset 1.5px 0 0 var(--c);
+  font: 500 10.5px/1 "JetBrains Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--c);
+  flex-shrink: 0;
+}
+
+.st svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.st svg circle {
+  fill: currentColor;
+  opacity: .16;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.st svg circle.on {
+  opacity: 1;
+  filter: drop-shadow(0 0 1.5px var(--c));
+  animation: pop .5s cubic-bezier(.2, 1.4, .4, 1) both;
+  animation-delay: calc(var(--i) * 45ms);
+}
+
+@keyframes pop {
+  from { opacity: .16; transform: scale(.4); }
+}
+
+.st.passed { --c: #3ecf8e; }
+.st.blocked { --c: #f0565c; }
+.st.running { --c: #a194ff; }
+.st.warning { --c: #f5a524; }
+.st.rolled  { --c: #9a9aa6; }
+
+.st.blocked svg circle.on {
+  animation: pop .5s cubic-bezier(.2, 1.4, .4, 1) both, throb 1.6s ease-in-out .8s infinite;
+  animation-delay: calc(var(--i) * 45ms), .8s;
+}
+
+@keyframes throb {
+  50% { opacity: .45; }
+}
+
+.st.running svg circle.on {
+  animation: chase 1.1s linear infinite;
+  animation-delay: calc(var(--i) * -68.75ms);
+}
+
+@keyframes chase {
+  0% { opacity: 1; }
+  60%, 100% { opacity: .14; }
+}
+
+.go {
+  width: 16px;
+  height: 16px;
+  color: #4a4a54;
+  transition: color .2s, transform .3s cubic-bezier(.22, 1, .36, 1);
+  flex-shrink: 0;
+}
+
+.go circle {
+  fill: currentColor;
+}
+
+.row:hover .go,
+.run-row:hover .go {
+  color: #ededf2;
+  transform: translateX(3px);
+}
+
 .verdict {
   display: inline-flex;
   align-items: center;
