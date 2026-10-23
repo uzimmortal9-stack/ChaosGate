@@ -89,16 +89,18 @@ button {
 }
 
 /* --------------------------------------------------------------------------
-   Ambient 3D Halftone Dither Canvas & Aurora Atmosphere
+   Ambient Fluid Light Wave Canvas & Aurora Atmosphere
    -------------------------------------------------------------------------- */
 .ambient-canvas {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
   width: 100vw;
-  height: 100vh;
+  height: 380px;
   pointer-events: none;
-  z-index: 0;
-  opacity: 0.38;
+  z-index: 1;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 40%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 40%, rgba(0, 0, 0, 0) 100%);
 }
 
 .aurora-wrap {
