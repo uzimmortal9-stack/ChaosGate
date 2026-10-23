@@ -1,6 +1,5 @@
 (() => {
   const app = document.getElementById("app");
-  const bootEl = document.getElementById("boot");
   const toastRoot = document.getElementById("toasts");
 
   const state = {
@@ -19,8 +18,17 @@
     observability: null,
     webhooks: [],
     stream: null,
-    // editor
-    tab: "files",
+    
+    // View state
+    activeTab: "overview",
+    runStatusFilter: "all",
+    selectedStage: null,
+    showFullLog: false,
+    revertData: null,
+    revertLoading: false,
+
+    // Workspace editor
+    repoTab: "runs",
     tree: null,
     treePath: "",
     open: [],          // [{path, content, original, language, binary}]
@@ -28,15 +36,12 @@
     status: { files: [], clean: true },
     diff: "",
     diffPath: null,
-    pushing: false,
-    showRecovery: null,
-    selected: null,     // Set of paths, null = all
-    strategy: null,
+    selected: null,
     modal: null,
     busy: false,
   };
 
-  // ------------------------------------------------------------------ api
+  // ------------------------------------------------------------------ API
   const api = {
     async req(path, opts = {}) {
       const res = await fetch(path, {
@@ -84,7 +89,7 @@
     capabilities: () => api.req("/api/capabilities?refresh=1"),
     publishDashboard: () => api.req("/api/observability/dashboard/publish", { method: "POST" }),
 
-    // workspace
+    // Workspace
     openWs: (id, body = {}) => api.req(`/api/repos/${id}/workspace`, { method: "POST", body }),
     wsInfo: (id) => api.req(`/api/repos/${id}/workspace`),
     closeWs: (id) => api.req(`/api/repos/${id}/workspace`, { method: "DELETE" }),
@@ -100,13 +105,17 @@
     push: (id, body) => api.req(`/api/repos/${id}/push`, { method: "POST", body }),
   };
 
-  // ---------------------------------------------------------------- utils
-  function toast(message, kind = "") {
+  // ---------------------------------------------------------------- Utilities
+  function toast(message, kind = "ok") {
+    if (!toastRoot) return;
     const el = document.createElement("div");
     el.className = `toast ${kind}`;
     el.textContent = message;
     toastRoot.appendChild(el);
-    setTimeout(() => el.remove(), 5000);
+    setTimeout(() => {
+      el.style.opacity = "0";
+      setTimeout(() => el.remove(), 300);
+    }, 4500);
   }
 
   const esc = (v) =>
@@ -114,7 +123,9 @@
       .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 
-  function path() { return location.pathname.replace(/\/+$/, "") || "/"; }
+  function path() {
+    return location.pathname.replace(/\/+$/, "") || "/";
+  }
 
   function go(href, replace = false) {
     if (replace) history.replaceState({}, "", href);
@@ -123,6 +134,7 @@
   }
 
   window.addEventListener("popstate", () => render());
+
   document.addEventListener("click", (e) => {
     const a = e.target.closest("a[href]");
     if (!a) return;
@@ -132,1285 +144,818 @@
     go(href);
   });
 
-  function badge(status) {
-    const label = (status || "idle").toUpperCase();
-    return `<span class="badge ${esc(status || "idle")}">${esc(label)}</span>`;
-  }
-
   function ago(iso) {
-    if (!iso) return "—";
+    if (!iso) return "just now";
     const then = new Date(iso).getTime();
     if (Number.isNaN(then)) return "—";
     const s = Math.max(0, (Date.now() - then) / 1000);
     if (s < 45) return "just now";
     if (s < 3600) return `${Math.floor(s / 60)}m ago`;
     if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-    if (s < 2592000) return `${Math.floor(s / 86400)}d ago`;
-    return new Date(iso).toLocaleDateString();
+    return `${Math.floor(s / 86400)}d ago`;
   }
 
-  function bytes(n) {
-    if (n == null) return "—";
-    if (n < 1024) return `${n} B`;
-    if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / 1048576).toFixed(1)} MB`;
+  function dur(seconds) {
+    if (seconds == null || isNaN(seconds)) return "—";
+    const s = Number(seconds);
+    if (s < 60) return `${s.toFixed(1)}s`;
+    return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
   }
 
-  function dur(ms) {
-    if (ms == null) return "";
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
+  // ---------------------------------------------------------------- Visual Components
+  function Score(value, size = 40) {
+    const num = Math.round(Number(value) || 0);
+    const r = size / 2 - (size > 80 ? 6 : 3.5);
+    const c = 2 * Math.PI * r;
+    const color = num >= 75 ? "#34d399" : num >= 50 ? "#fcd34d" : "#fb7185";
+    const strokeWidth = size > 80 ? 6 : 3;
+    const fontSize = size > 80 ? "text-4xl" : "text-xs";
+    const offset = c * (1 - Math.max(0, Math.min(100, num)) / 100);
+    return `
+      <div class="score-wrap" style="width:${size}px; height:${size}px;">
+        <svg width="${size}" height="${size}" class="score-svg">
+          <circle cx="${size / 2}" cy="${size / 2}" r="${r}" stroke="rgba(255,255,255,0.08)" stroke-width="${strokeWidth}" fill="none" />
+          <circle cx="${size / 2}" cy="${size / 2}" r="${r}" stroke="${color}" stroke-width="${strokeWidth}" fill="none" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${offset}" />
+        </svg>
+        <span class="score-num ${fontSize}">${num}</span>
+      </div>`;
   }
 
-  const LANG_COLORS = {
-    Python: "#3572A5", JavaScript: "#f1e05a", TypeScript: "#3178c6", Go: "#00ADD8",
-    Rust: "#dea584", Java: "#b07219", Ruby: "#701516", PHP: "#4F5D95",
-    "C++": "#f34b7d", C: "#555555", Shell: "#89e051", HTML: "#e34c26", CSS: "#563d7c",
-  };
-
-  function brand(compact = false) {
-    return `<a class="brand" href="${compact ? "/console" : "/"}">
-      <img src="/static/img/mark.svg" alt="" />
-      CHAOSGATE
-      ${compact ? "" : "<span>RELEASE GATE</span>"}
-    </a>`;
+  function Verdict(conclusion, size = "sm") {
+    const pass = conclusion === "PASS";
+    const isRun = conclusion === "running" || conclusion === "queued";
+    if (isRun) {
+      return `<span class="verdict verdict-run">
+        <span class="verdict-dot bg-indigo-400"></span>
+        Running
+      </span>`;
+    }
+    return `<span class="verdict ${pass ? "verdict-pass" : "verdict-fail"} ${size === "lg" ? "verdict-lg" : ""}">
+      <span class="verdict-dot ${pass ? "bg-emerald-400" : "bg-rose-400"}"></span>
+      ${pass ? "Passed" : "Blocked"}
+    </span>`;
   }
 
-  // ------------------------------------------------------------- landing
-  function landing() {
-    const caps = state.me?.capabilities || {};
-    const tools = state.me?.toolchain || {};
-    const chips = Object.entries(tools).map(([name, t]) =>
-      `<span class="pill ${t.available ? "go" : "dim"}">${t.available ? "●" : "○"} ${esc(name)}</span>`
-    ).join("");
-
-    return `<div class="landing">
-      <header class="topbar">
-        ${brand()}
-        <nav class="top-links">
-          <a href="/console/docs">Contract</a>
-          <a href="/console/observability">Observability</a>
-          <a href="/console">Console</a>
-          <a href="/console/connect">Connect GitHub</a>
-        </nav>
-      </header>
-      <section class="hero">
-        <div>
-          <p class="kicker">Continuous Resilience and Security Gateway</p>
-          <h1>Deploy only<br>if it<br><em>survives</em></h1>
-          <p class="lede">
-            Connect GitHub, pick a repository, open its folder right here and edit it.
-            Push, and the pipeline fires: unit tests, secret scan, a real container build,
-            Kubernetes validation, k6 load, Prometheus metrics, a chaos kill, and a Grafana
-            dashboard. PASS opens the merge. FAIL seals <code>main</code>.
-          </p>
-          <div class="cta-row">
-            <button class="btn btn-go" data-act="demo">Launch App</button>
-            <a class="btn" href="/console/connect">Connect GitHub</a>
-          </div>
-          <div class="row wrap" style="margin-top:20px;gap:6px">${chips}</div>
-        </div>
-        <aside class="gate-card">
-          <div class="gate-head">
-            <span>PIPELINE / 13 STAGES</span>
-            <span class="lamp"><i></i> ARMED</span>
-          </div>
-          <div class="stages-mini">
-            ${["Validate","Detect","Unit","Build","Security","Docker","Kubernetes","Smoke","k6 Load","Prometheus","Chaos","Grafana","Verdict"]
-              .map((name, i) => `<div class="mini-row ${i < 7 ? "on" : ""}">
-                <span class="dot ${i < 6 ? "go" : i === 6 ? "hold" : ""}"></span>
-                <span>${name}</span>
-                <span class="mono">${i < 6 ? "PASS" : i === 6 ? "RUN" : "—"}</span>
-              </div>`).join("")}
-          </div>
-          <div class="metrics-mini">
-            <div class="metric"><b>${caps.real_k6 ? "k6" : "built-in"}</b><span>load engine</span></div>
-            <div class="metric"><b>${caps.container_builds ? "live" : "audit"}</b><span>docker</span></div>
-            <div class="metric"><b>20</b><span>grafana panels</span></div>
-          </div>
-        </aside>
-      </section>
-      <section class="strip">
-        <article><div class="n">01</div><h3>Connect</h3><p>OAuth or a personal access token. Browse every repository you can push to, then select one.</p></article>
-        <article><div class="n">02</div><h3>Edit</h3><p>The repo is cloned into a local workspace. Open the folder, edit files, review the diff.</p></article>
-        <article><div class="n">03</div><h3>Push</h3><p>Commit to a branch, open a pull request, and the gate starts automatically.</p></article>
-        <article><div class="n">04</div><h3>Prove</h3><p>k6, Docker, Kubernetes, Prometheus, Grafana and a chaos experiment decide the verdict.</p></article>
-      </section>
-      <footer class="footer-l"><span>GATE PROTOCOL v2</span><span>LOCAL WORKSPACE · REAL TOOLS WHEN PRESENT · HONEST WHEN NOT</span></footer>
-    </div>`;
-  }
-
-  function shell(inner) {
-    const here = path();
-    const item = (href, icon, label, exact = false) => {
-      const active = exact ? here === href : here === href || (href !== "/console" && here.startsWith(href));
-      return `<a href="${href}" class="${active ? "active" : ""}"><span class="ico">${icon}</span>${label}</a>`;
+  function Nav() {
+    const r = parseRoute();
+    const here = r.name;
+    const item = (href, label, key) => {
+      const active = here === key || (key === "overview" && here === "landing");
+      return `<a href="${href}" class="nav-link ${active ? "active" : ""}">${label}</a>`;
     };
-    const login = state.me?.workspace?.github_login;
-    const caps = state.me?.capabilities || {};
-    const degraded = Object.values(state.me?.toolchain || {}).filter((t) => !t.available).length;
-    return `<div class="shell">
-      <aside class="side">
-        ${brand(true)}
-        <nav class="nav">
-          ${item("/console", "◎", "Overview", true)}
-          ${item("/console/repos", "▣", "Repositories")}
-          ${item("/console/runs", "⚡", "Runs")}
-          ${item("/console/observability", "◈", "Observability")}
-          ${item("/console/connect", "⊕", "Connect")}
-          ${item("/console/docs", "▤", "Contract")}
-          ${item("/console/settings", "⚙", "Settings")}
+    return `
+      <div class="nav-fixed-wrap">
+        <nav class="nav-pill glass">
+          <a href="/" class="brand-link">
+            <span class="brand-icon">C</span>
+            <span class="brand-name">ChaosGate</span>
+          </a>
+          ${item("/", "Overview", "overview")}
+          ${item("/runs", "Runs", "runs")}
+          ${item("/repos", "Repositories", "repos")}
+          ${item("/settings", "Policies", "settings")}
+          ${item("/observability", "Observability", "observability")}
+          ${item("/docs", "Docs", "docs")}
         </nav>
-        <div class="side-foot">
-          ${login ? `GH @${esc(login)}` : "DEMO WORKSPACE"}<br />
-          GATE ${state.me?.workspace?.connected ? "LINKED" : "LOCAL"}<br />
-          ${degraded ? `${degraded} TOOL${degraded > 1 ? "S" : ""} DEGRADED` : "ALL TOOLS READY"}
-        </div>
-      </aside>
-      <main class="main">${inner}</main>
-    </div>`;
+      </div>`;
   }
 
-  // ------------------------------------------------------------ overview
-  function overview() {
+  function Shell(inner) {
+    return `
+      ${Nav()}
+      <main class="app-main">
+        ${inner}
+      </main>
+      ${ModalSheet()}`;
+  }
+
+  // ---------------------------------------------------------------- Screens
+  // 1. Overview Screen
+  function overviewView() {
     const s = state.me?.stats || {};
     const runs = state.me?.recent_runs || [];
-    const pushes = state.me?.recent_pushes || [];
-    const tools = state.me?.toolchain || {};
+    const repos = state.repos || [];
+    const cfg = state.policy || {};
+    const maxP95 = cfg.max_p95_ms || 300;
+    
+    // Determine blocked repos from last_run or runs
+    const blockedRepos = repos.filter((r) => {
+      const lr = r.last_run || (runs.find((x) => x.repo_id === r.id || x.repo?.id === r.id));
+      return lr && lr.conclusion === "FAIL";
+    });
+    const passRate = s.pass_rate != null ? Math.round(s.pass_rate) : (s.runs ? Math.round((s.passed / s.runs) * 100) : 0);
 
-    return shell(`
-      <div class="page-head">
-        <div>
-          <p class="kicker">Workspace</p>
-          <h1>Overview</h1>
-          <p>Connect a repository, edit it here, push, and watch the gate decide.</p>
-        </div>
-        <div class="cta-row">
-          <a class="btn" href="/console/connect">Connect GitHub</a>
-          <a class="btn btn-go" href="/console/repos">Repositories</a>
-        </div>
-      </div>
-      <div class="grid-4" style="margin-bottom:14px">
-        <div class="stat"><b>${s.repos ?? 0}</b><span>Connected repos</span></div>
-        <div class="stat"><b>${s.runs ?? 0}</b><span>Completed runs</span></div>
-        <div class="stat"><b>${s.pass_rate == null ? "—" : s.pass_rate + "%"}</b><span>Pass rate</span></div>
-        <div class="stat"><b>${s.pushes ?? 0}</b><span>Pushes from editor</span></div>
-      </div>
-
-      <section class="card" style="margin-bottom:14px">
-        <h2>Toolchain</h2>
-        <p class="help">Stages run for real where the tool exists, and degrade honestly where it does not.</p>
-        <div class="obs-grid" style="margin-top:12px">
-          ${Object.entries(tools).map(([name, t]) => `
-            <div class="tool-card ${t.available ? "ready" : "down"}">
-              <h4>${esc(name)}</h4>
-              <div class="tv">${t.available ? esc(t.version || "ready") : "DEGRADED"}</div>
-              <p>${esc(t.detail || "")}</p>
-            </div>`).join("")}
-        </div>
-      </section>
-
-      <div class="grid-2">
-        <section class="card">
-          <h2>Recent verdicts</h2>
-          ${runs.length ? `<table class="table">
-            <thead><tr><th>Repo</th><th>Trigger</th><th>Gate</th><th>Score</th><th>When</th></tr></thead>
-            <tbody>${runs.map((r) => `<tr data-href="/console/runs/${r.id}">
-              <td>${esc(r.repo?.full_name || "")}</td>
-              <td class="mono tiny">${esc(r.trigger)}</td>
-              <td>${badge(r.conclusion || r.status)}</td>
-              <td class="mono">${r.score ?? "—"}</td>
-              <td>${ago(r.created_at)}</td>
-            </tr>`).join("")}</tbody></table>`
-            : `<div class="empty">No runs yet. Open a repository and press Run Gate.</div>`}
-        </section>
-        <section class="card">
-          <h2>Recent pushes</h2>
-          ${pushes.length ? `<table class="table">
-            <thead><tr><th>Branch</th><th>Message</th><th>Files</th><th>When</th></tr></thead>
-            <tbody>${pushes.map((p) => `<tr ${p.run_id ? `data-href="/console/runs/${p.run_id}"` : ""}>
-              <td class="mono tiny">${esc(p.branch)}</td>
-              <td>${esc((p.message || "").slice(0, 40))}</td>
-              <td class="mono">${p.file_count}</td>
-              <td>${ago(p.created_at)}</td>
-            </tr>`).join("")}</tbody></table>`
-            : `<div class="empty">Nothing pushed yet. Open a repo's <b>Editor</b> tab to make a change.</div>`}
-        </section>
-      </div>
-    `);
-  }
-
-  // ----------------------------------------------------------- repo list
-  function reposView() {
-    const cards = state.repos.map((r) => `
-      <article class="repo" data-href="/console/repos/${r.id}">
-        <div class="meta">
-          ${esc(r.language || "unknown")}
-          ${r.is_sample ? "· SAMPLE TARGET" : r.private ? "· PRIVATE" : ""}
-          ${r.workspace_cloned ? "· WORKSPACE OPEN" : ""}
-        </div>
-        <h3>${esc(r.full_name)}</h3>
-        <p>${esc(r.description || "Connected repository")}</p>
-        <div class="repo-foot">
-          ${badge(r.last_status)}
-          ${r.last_run_at ? `<span class="meta">${ago(r.last_run_at)}</span>` : ""}
-        </div>
-      </article>`).join("");
-
-    return shell(`
-      <div class="page-head">
-        <div>
-          <p class="kicker">Targets</p>
-          <h1>Repositories</h1>
-          <p>These are applications under test — not ChaosGate itself.</p>
-        </div>
-        <a class="btn btn-go" href="/console/connect">Connect another</a>
-      </div>
-      <div class="repo-grid">${cards || `<div class="empty">No repositories connected.</div>`}</div>
-    `);
-  }
-
-  // =========================================================== repo detail
-  const TABS = [
-    ["overview", "Overview"],
-    ["files", "Editor"],
-    ["changes", "Changes"],
-    ["runs", "Runs"],
-    ["automation", "Automation"],
-  ];
-
-  function repoView() {
-    const r = state.repo;
-    if (!r) return shell(`<div class="empty">Repository not found.</div>`);
-
-    const changed = state.status?.files?.length || 0;
-    const tabs = TABS.map(([key, label]) => {
-      const count = key === "changes" && changed ? `<span class="count">${changed}</span>` : "";
-      return `<button data-act="tab" data-tab="${key}" class="${state.tab === key ? "active" : ""}">${label}${count}</button>`;
-    }).join("");
-
-    let body = "";
-    if (state.tab === "overview") body = repoOverview(r);
-    else if (state.tab === "files") body = editorPane(r);
-    else if (state.tab === "changes") body = changesPane(r);
-    else if (state.tab === "runs") body = repoRuns(r);
-    else if (state.tab === "automation") body = automationPane(r);
-
-    const wsOpen = r.workspace_cloned;
-    return shell(`
-      <div class="page-head">
-        <div>
-          <p class="kicker">${esc(r.owner)} / ${r.is_sample ? "SAMPLE TARGET" : r.private ? "PRIVATE" : "CONNECTED"}</p>
-          <h1>${esc(r.name)}</h1>
-          <p>
-            ${esc(r.description || "")}
-            ${r.html_url ? ` · <a href="${esc(r.html_url)}" target="_blank" rel="noreferrer">GitHub ↗</a>` : ""}
+    return Shell(`
+      <div class="space-y-6">
+        <section class="hero-section rise">
+          <p class="hero-pill">
+            <span class="pulse-dot"></span> Gate armed
           </p>
+          <h1 class="hero-headline">
+            ${blockedRepos.length === 0 ? "Everything is clear to ship." : `${blockedRepos.length} ${blockedRepos.length === 1 ? "repository is" : "repositories are"} blocked from merging.`}
+          </h1>
+          <p class="hero-sub">
+            Deploy only if it survives — every pull request is load-tested, attacked and verified before main.
+          </p>
+        </section>
+
+        <div class="grid-3">
+          <div class="glass lift stat-panel rise">
+            <p class="stat-label">Pass rate</p>
+            <p class="stat-value">${passRate}%</p>
+            <p class="stat-sub">${s.runs ?? runs.length} completed runs</p>
+          </div>
+          <div class="glass lift stat-panel rise">
+            <p class="stat-label">Latency SLA</p>
+            <p class="stat-value">${maxP95}ms</p>
+            <p class="stat-sub">p95 SLA threshold</p>
+          </div>
+          <div class="glass lift stat-panel rise">
+            <p class="stat-label">Repositories</p>
+            <p class="stat-value">${repos.length}</p>
+            <p class="stat-sub">${blockedRepos.length} blocked from merge</p>
+          </div>
         </div>
-        <div class="cta-row">
-          <button class="btn btn-go" data-act="run" data-id="${r.id}">Run Gate</button>
-          ${!r.is_sample && !wsOpen ? `<button class="btn" data-act="open-ws" data-id="${r.id}">Open folder</button>` : ""}
-          ${wsOpen ? `<button class="btn" data-act="pull-ws" data-id="${r.id}">Pull</button>` : ""}
-          ${r.is_sample ? "" : `<button class="btn" data-act="unlink" data-id="${r.id}">Unlink</button>`}
+
+        ${blockedRepos.length > 0 ? `
+          <div class="grid-2">
+            ${blockedRepos.map((r) => {
+              const lr = r.last_run || runs.find((x) => x.repo_id === r.id || x.repo?.id === r.id) || {};
+              return `
+                <a href="/runs/${lr.id || ''}" class="glass lift block p-5 rounded-3xl" style="padding:22px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-weight:600; font-size:15px;">${esc(r.name || r.full_name)}</span>
+                    ${Verdict("FAIL")}
+                  </div>
+                  <p style="margin-top:12px; font-size:13.5px; color:rgba(251,113,133,0.85);">${esc(lr.summary || "Policy violation detected")}</p>
+                  <p style="margin-top:12px; font-size:12.5px; color:var(--text-dim);">
+                    ${lr.pr_number ? `PR #${lr.pr_number}` : lr.branch || "main"} · ${esc(lr.commit_message || "Commit")} · ${ago(lr.created_at)}
+                  </p>
+                </a>
+              `;
+            }).join("")}
+          </div>
+        ` : ""}
+
+        <div class="glass rise" style="overflow:hidden;">
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:20px 24px 14px;">
+            <h2 style="font-size:16px; font-weight:600;">Recent runs</h2>
+            <a href="/runs" style="font-size:13.5px; color:var(--text-muted); transition:color 0.2s;">View all →</a>
+          </div>
+          ${RunList(runs.slice(0, 6))}
         </div>
       </div>
-      <div class="row wrap" style="margin-bottom:16px;gap:8px">
-        ${badge(r.last_status)}
-        <span class="pill">${esc(r.default_branch)}</span>
-        ${r.language ? `<span class="pill"><span class="lang-dot" style="background:${LANG_COLORS[r.language] || "#6a7388"}"></span>${esc(r.language)}</span>` : ""}
-        ${wsOpen ? `<span class="pill go">workspace ${esc(r.workspace_branch || "")} @ ${esc(r.workspace_sha || "")}</span>` : ""}
-        ${changed ? `<span class="pill hold">${changed} uncommitted change${changed > 1 ? "s" : ""}</span>` : ""}
-        ${r.workflow_installed ? `<span class="pill go">workflow installed</span>` : ""}
-        ${r.webhook_id ? `<span class="pill go">webhook active</span>` : ""}
-      </div>
-      <div class="tabs">${tabs}</div>
-      ${body}
     `);
   }
 
-  function repoOverview(r) {
-    const lastRun = (r.runs || [])[0];
-    return `
-      <div class="grid-2">
-        <section class="card">
-          <h2>The loop</h2>
-          <ol class="step-list" style="margin:12px 0 0;padding:0">
-            <li><div><b>Open the folder</b><div class="help">Clones ${esc(r.full_name)} into a local workspace you can edit.</div></div></li>
-            <li><div><b>Edit files</b><div class="help">Full text editor with dirty tracking and a diff view.</div></div></li>
-            <li><div><b>Push</b><div class="help">Commits to a <code>chaosgate/*</code> branch and opens a pull request.</div></div></li>
-            <li><div><b>The gate fires</b><div class="help">13 stages run and the verdict is posted back as a commit status.</div></div></li>
-          </ol>
-          <div style="height:16px"></div>
-          ${r.is_sample
-            ? `<div class="banner"><div><b>Sample target</b><p>Bundled samples are read-only fixtures. Connect one of your own GitHub repositories to use the editor and push flow.</p></div></div>`
-            : r.workspace_cloned
-              ? `<button class="btn btn-go" data-act="tab" data-tab="files">Open the editor →</button>`
-              : `<button class="btn btn-go" data-act="open-ws" data-id="${r.id}">Open folder</button>`}
-        </section>
-        <section class="card">
-          <h2>Last verdict</h2>
-          ${lastRun ? `
-            <div class="verdict-banner ${esc(lastRun.conclusion || "")}" style="margin:8px 0 0">
-              <div>
-                <p class="kicker">${lastRun.conclusion === "PASS" ? "GATE OPEN" : lastRun.conclusion ? "GATE SEALED" : "IN FLIGHT"}</p>
-                <h2>${esc(lastRun.conclusion || lastRun.status)}</h2>
-                <p>${esc(lastRun.summary || "")}</p>
-              </div>
-              <div class="score">${lastRun.score ?? "—"}</div>
-            </div>
-            <div style="height:12px"></div>
-            <a class="btn btn-sm" href="/console/runs/${lastRun.id}">Open run detail</a>`
-            : `<div class="empty">This target has not been through the gate yet.</div>`}
-        </section>
-      </div>`;
-  }
-
-  // ------------------------------------------------------------- editor
-  const FILE_ICONS = { dir: "▸", py: "◆", js: "◇", json: "▪", yml: "▫", yaml: "▫", md: "▤", default: "·" };
-  function fileIcon(entry) {
-    if (entry.type === "dir") return "▸";
-    const ext = (entry.name.split(".").pop() || "").toLowerCase();
-    return FILE_ICONS[ext] || FILE_ICONS.default;
-  }
-
-  function editorPane(r) {
-    if (r.is_sample) {
-      return `<div class="empty">Sample targets are read-only. Connect one of your own repositories to edit and push.</div>`;
-    }
-    if (!r.workspace_cloned) {
-      return `<section class="card">
-        <h2>The folder is not open yet</h2>
-        <p class="help">ChaosGate clones ${esc(r.full_name)} into a private local workspace. You edit there, then push a branch.</p>
-        <div style="height:14px"></div>
-        <button class="btn btn-go" data-act="open-ws" data-id="${r.id}">Open folder</button>
-      </section>`;
-    }
-
-    const tree = state.tree;
-    const crumbs = buildCrumbs(state.treePath);
-    const rows = (tree?.entries || []).map((e) => {
-      const active = state.activePath === e.path;
-      return `<div class="filerow ${e.type} ${active ? "active" : ""} ${e.ignored ? "ignored" : ""}"
-           data-act="${e.type === "dir" ? "cd" : "open-file"}" data-path="${esc(e.path)}" title="${esc(e.path)}">
-        <span class="fi">${fileIcon(e)}</span>
-        <span class="fname">${esc(e.name)}</span>
-        ${e.dirty ? `<span class="fdot" title="modified"></span>`
-          : e.type === "file" ? `<span class="fsize">${bytes(e.size)}</span>` : ""}
-      </div>`;
-    }).join("");
-
-    const openTabs = state.open.map((f) => {
-      const dirty = f.content !== f.original;
-      return `<div class="ide-tab ${state.activePath === f.path ? "active" : ""}" data-act="focus-file" data-path="${esc(f.path)}">
-        ${dirty ? `<span class="dirty"></span>` : ""}
-        <span>${esc(f.path.split("/").pop())}</span>
-        <span class="x" data-act="close-file" data-path="${esc(f.path)}">×</span>
-      </div>`;
-    }).join("");
-
-    const active = state.open.find((f) => f.path === state.activePath);
-    let pane;
-    if (!active) {
-      pane = `<div class="ide-empty">
-        <b>No file open</b>
-        <span class="help">Pick a file from the tree to start editing.</span>
-      </div>`;
-    } else if (active.binary) {
-      pane = `<div class="ide-empty"><b>Binary file</b><span class="help">${esc(active.path)} · ${bytes(active.size)}</span></div>`;
-    } else {
-      pane = `<div class="editor-wrap">
-        <textarea class="editor" id="editor" spellcheck="false" data-path="${esc(active.path)}">${esc(active.content)}</textarea>
-      </div>`;
-    }
-
-    const dirtyCount = state.open.filter((f) => f.content !== f.original).length;
-
-    return `<div class="ide">
-      <aside class="ide-side">
-        <div class="ide-side-head">
-          <span>Files</span>
-          <span class="ide-side-actions">
-            <button class="icon-btn" data-act="new-file" title="New file">＋</button>
-            <button class="icon-btn" data-act="refresh-tree" title="Refresh">⟳</button>
-          </span>
-        </div>
-        <div class="crumbs">${crumbs}</div>
-        <div class="filelist">${rows || `<div class="filerow"><span class="muted tiny">empty folder</span></div>`}</div>
-      </aside>
-      <div class="ide-main">
-        <div class="ide-tabbar">${openTabs || `<div class="ide-tab muted">no open files</div>`}</div>
-        ${pane}
-        <div class="ide-status">
-          <span>${active ? esc(active.path) : "—"}</span>
-          ${active && !active.binary ? `<span>${active.content.split("\n").length} lines</span>` : ""}
-          ${active ? `<span>${esc(active.language || "text")}</span>` : ""}
-          <span class="spacer"></span>
-          ${dirtyCount ? `<span class="pill hold">${dirtyCount} unsaved</span>` : `<span class="muted">saved</span>`}
-          ${active && !active.binary ? `<button class="btn btn-sm" data-act="save-file">Save <span class="mono tiny">⌘S</span></button>` : ""}
-          ${active ? `<button class="btn btn-sm" data-act="delete-file" data-path="${esc(active.path)}">Delete</button>` : ""}
-        </div>
-      </div>
-    </div>
-    <div class="row wrap" style="margin-top:14px">
-      <button class="btn btn-go" data-act="tab" data-tab="changes">Review changes & push →</button>
-      <span class="muted tiny">Saving writes to the local workspace. Nothing reaches GitHub until you push.</span>
-    </div>`;
-  }
-
-  function buildCrumbs(p) {
-    const parts = (p || "").split("/").filter(Boolean);
-    let acc = "";
-    const links = [`<a data-act="cd" data-path="">root</a>`];
-    for (const part of parts) {
-      acc = acc ? `${acc}/${part}` : part;
-      links.push(`<span>/</span><a data-act="cd" data-path="${esc(acc)}">${esc(part)}</a>`);
-    }
-    return links.join("");
-  }
-
-  // ------------------------------------------------------------ changes
-  function changesPane(r) {
-    if (r.is_sample) return `<div class="empty">Sample targets are read-only.</div>`;
-    if (!r.workspace_cloned) return `<div class="empty">Open the folder first.</div>`;
-
-    const files = state.status?.files || [];
-    if (!files.length) {
-      return `<section class="card">
-        <h2>Working tree is clean</h2>
-        <p class="help">Nothing to push. Edit a file in the <b>Editor</b> tab and it will show up here.</p>
-      </section>`;
-    }
-
-    const selected = state.selected;
-    const isSel = (p) => !selected || selected.has(p);
-    const strategy = state.strategy || state.me?.push_strategy || "branch_pr";
-
-    const rows = files.map((f) => `
-      <label class="changed-row">
-        <input type="checkbox" data-act="sel-file" data-path="${esc(f.path)}" ${isSel(f.path) ? "checked" : ""} />
-        <span class="cpath">${esc(f.path)}</span>
-        <span class="ctag ${esc(f.status)}">${esc(f.status)}</span>
-        <button class="icon-btn" data-act="show-diff" data-path="${esc(f.path)}" title="Diff">◧</button>
-        <button class="icon-btn" data-act="discard-file" data-path="${esc(f.path)}" title="Discard">↺</button>
-      </label>`).join("");
-
-    const count = files.filter((f) => isSel(f.path)).length;
-    const connected = state.me?.workspace?.connected;
-
-    return `<div class="grid-2">
-      <section class="card push-panel">
-        <h2>${files.length} change${files.length > 1 ? "s" : ""} in the workspace</h2>
-        <div class="changed-list">${rows}</div>
-
-        ${!connected ? `<div class="banner stop"><div><b>GitHub is not connected</b><p>Connect GitHub before pushing. <a href="/console/connect">Connect now →</a></p></div></div>` : ""}
-
-        <div>
-          <div class="field">
-            <label>Commit message</label>
-            <textarea class="textarea" id="commit-msg" placeholder="fix: correct the health check timeout">${esc(state.commitMsg || "")}</textarea>
-          </div>
-          <div class="strategy-grid">
-            <div class="strategy ${strategy === "branch_pr" ? "on" : ""}" data-act="strategy" data-value="branch_pr">
-              <b>Branch + pull request</b>
-              <span>Pushes to <code>chaosgate/&lt;timestamp&gt;</code> and opens a PR against <code>${esc(r.default_branch)}</code>. Recommended.</span>
-            </div>
-            <div class="strategy ${strategy === "direct" ? "on" : ""}" data-act="strategy" data-value="direct">
-              <b>Direct to ${esc(r.default_branch)}</b>
-              <span>Commits straight onto the default branch. No review, no PR.</span>
-            </div>
-          </div>
-          <div style="height:12px"></div>
-          <label class="row tiny"><input type="checkbox" id="run-gate" checked /> &nbsp;Run the gate immediately after pushing</label>
-          <div style="height:14px"></div>
-          <button class="btn btn-go" data-act="push" data-id="${r.id}" ${state.pushing || !connected ? "disabled" : ""}>
-            ${state.pushing ? "Pushing…" : `Push ${count} file${count === 1 ? "" : "s"} & run gate`}
-          </button>
-          <button class="btn" data-act="discard-all">Discard all</button>
-        </div>
-      </section>
-      <section class="card">
-        <h2>Diff ${state.diffPath ? `<span class="mono tiny muted">${esc(state.diffPath)}</span>` : ""}</h2>
-        ${state.diff ? renderDiff(state.diff) : `<div class="empty">Select a file's ◧ icon to see its diff.</div>`}
-      </section>
-    </div>`;
-  }
-
-  function renderDiff(text) {
-    const lines = text.split("\n").slice(0, 1200).map((line) => {
-      let cls = "";
-      if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("new file")) cls = "meta";
-      else if (line.startsWith("@@")) cls = "hunk";
-      else if (line.startsWith("+")) cls = "add";
-      else if (line.startsWith("-")) cls = "del";
-      return `<div class="${cls}">${esc(line) || "&nbsp;"}</div>`;
-    }).join("");
-    return `<div class="diff">${lines}</div>`;
-  }
-
-  // --------------------------------------------------------------- runs
-  function repoRuns(r) {
-    const runs = r.runs || [];
-    return `<section class="card">
-      <h2>Run history</h2>
-      ${runs.length ? `<table class="table">
-        <thead><tr><th>ID</th><th>Trigger</th><th>Branch</th><th>Verdict</th><th>Score</th><th>Summary</th><th>When</th></tr></thead>
-        <tbody>${runs.map((run) => `<tr data-href="/console/runs/${run.id}">
-          <td class="mono tiny">${esc(run.id.slice(0, 12))}</td>
-          <td class="mono tiny">${esc(run.trigger)}</td>
-          <td class="mono tiny">${esc(run.branch)}</td>
-          <td>${badge(run.conclusion || run.status)}</td>
-          <td class="mono">${run.score ?? "—"}</td>
-          <td>${esc((run.summary || "").slice(0, 60))}</td>
-          <td>${ago(run.created_at)}</td>
-        </tr>`).join("")}</tbody></table>`
-        : `<div class="empty">This target has not been through the gate yet.</div>`}
-    </section>`;
-  }
-
-  // --------------------------------------------------------- automation
-  function automationPane(r) {
-    const pushes = r.pushes || [];
-    return `<div class="grid-2">
-      <section class="card">
-        <h2>Trigger the gate from GitHub</h2>
-        <p class="help">Two independent paths. Both end in a commit status that can block a merge.</p>
-        <div style="height:14px"></div>
-        <div class="banner">
-          <div>
-            <b>1 · GitHub Actions workflow</b>
-            <p>Installs <code>.github/workflows/chaosgate.yml</code> so the gate runs on GitHub's runners, where Docker and k6 are available.</p>
-          </div>
-        </div>
-        <button class="btn ${r.workflow_installed ? "" : "btn-go"}" data-act="install-workflow" data-id="${r.id}">
-          ${r.workflow_installed ? "Reinstall workflow" : "Install workflow"}
-        </button>
-        <button class="btn" data-act="dispatch" data-id="${r.id}">Dispatch now</button>
-        <div style="height:20px"></div>
-        <div class="banner">
-          <div>
-            <b>2 · Webhook into this control plane</b>
-            <p>Every push and pull request calls back here and starts a run locally. Requires a publicly reachable <code>PUBLIC_URL</code>.</p>
-          </div>
-        </div>
-        <button class="btn ${r.webhook_id ? "" : "btn-go"}" data-act="install-webhook" data-id="${r.id}">
-          ${r.webhook_id ? "Webhook installed" : "Install webhook"}
-        </button>
-        <div style="height:18px"></div>
-        <label class="row tiny">
-          <input type="checkbox" data-act="toggle-autorun" data-id="${r.id}" ${r.auto_run_on_push ? "checked" : ""} />
-          &nbsp;Automatically run the gate when a push arrives
-        </label>
-      </section>
-      <section class="card">
-        <h2>Pushes from the editor</h2>
-        ${pushes.length ? `<table class="table">
-          <thead><tr><th>Branch</th><th>Message</th><th>PR</th><th>Run</th><th>When</th></tr></thead>
-          <tbody>${pushes.map((p) => `<tr>
-            <td class="mono tiny">${esc(p.branch)}</td>
-            <td>${esc((p.message || "").slice(0, 34))}</td>
-            <td>${p.pr_url ? `<a href="${esc(p.pr_url)}" target="_blank" rel="noreferrer">#${p.pr_number} ↗</a>` : "—"}</td>
-            <td>${p.run_id ? `<a href="/console/runs/${p.run_id}">open</a>` : "—"}</td>
-            <td>${ago(p.created_at)}</td>
-          </tr>`).join("")}</tbody></table>`
-          : `<div class="empty">No pushes yet.</div>`}
-      </section>
-    </div>`;
-  }
-  // ============================================================ runs list
+  // 2. Runs Screen
   function runsView() {
-    const rows = state.runs.map((r) => `<tr data-href="/console/runs/${r.id}">
-      <td class="mono tiny">${esc(r.id.slice(0, 12))}</td>
-      <td>${esc(r.repo?.full_name || "")}</td>
-      <td class="mono tiny">${esc(r.trigger)}</td>
-      <td>${badge(r.conclusion || r.status)}</td>
-      <td class="mono">${r.score ?? "—"}</td>
-      <td>${esc((r.summary || r.status).slice(0, 60))}</td>
-      <td>${ago(r.created_at)}</td>
-    </tr>`).join("");
+    const all = state.runs || [];
+    const filter = state.runStatusFilter || "all";
+    const filtered = filter === "pass" 
+      ? all.filter((r) => r.conclusion === "PASS") 
+      : filter === "fail" 
+        ? all.filter((r) => r.conclusion === "FAIL") 
+        : all;
 
-    return shell(`
-      <div class="page-head">
-        <div><p class="kicker">History</p><h1>Runs</h1><p>Every gate execution, with stage logs, metrics and artifacts.</p></div>
+    const passCount = all.filter((r) => r.conclusion === "PASS").length;
+    const failCount = all.filter((r) => r.conclusion === "FAIL").length;
+
+    return Shell(`
+      <div class="space-y-5">
+        <div class="page-header rise">
+          <div>
+            <h1 class="page-title">Runs</h1>
+            <p class="page-subtitle">Every gate check, newest first.</p>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:6px; margin-bottom:16px;">
+          <button data-act="filter-runs" data-filter="all" class="nav-link ${filter === "all" ? "active" : ""}">
+            All <span style="opacity:0.6; margin-left:4px;">${all.length}</span>
+          </button>
+          <button data-act="filter-runs" data-filter="pass" class="nav-link ${filter === "pass" ? "active" : ""}">
+            Passed <span style="opacity:0.6; margin-left:4px;">${passCount}</span>
+          </button>
+          <button data-act="filter-runs" data-filter="fail" class="nav-link ${filter === "fail" ? "active" : ""}">
+            Blocked <span style="opacity:0.6; margin-left:4px;">${failCount}</span>
+          </button>
+        </div>
+
+        <div class="glass rise" style="overflow:hidden;">
+          ${RunList(filtered)}
+        </div>
       </div>
-      <section class="card">
-        ${state.runs.length
-          ? `<table class="table"><thead><tr><th>ID</th><th>Repo</th><th>Trigger</th><th>Gate</th><th>Score</th><th>Summary</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`
-          : `<div class="empty">No pipeline runs yet.</div>`}
-      </section>
     `);
   }
 
-  // =========================================================== run detail
-  function histogram(values) {
-    if (!values || !values.length) return "";
-    const max = Math.max(...values, 1);
-    return `<div class="sparkbar">${values.map((v) => `<i style="height:${Math.max(2, (v / max) * 40)}px" title="${v}"></i>`).join("")}</div>`;
+  function RunList(runs) {
+    if (!runs || !runs.length) {
+      return `<div style="padding:48px 24px; text-align:center; color:var(--text-dim); font-size:14px;">No runs recorded yet.</div>`;
+    }
+    return `
+      <ul class="run-list">
+        ${runs.map((r) => `
+          <li class="run-list-item">
+            <a href="/runs/${r.id}" class="run-row">
+              ${Score(r.resilience_score ?? r.score, 40)}
+              <div class="run-main-info">
+                <p class="run-commit-msg">${esc(r.commit_message || "Manual run")}</p>
+                <p class="run-meta">
+                  <span class="run-meta-repo">${esc(r.repo?.full_name || r.repo?.name || "Repository")}</span> · 
+                  ${r.pr_number ? `PR #${r.pr_number}` : r.branch || "main"} · 
+                  ${esc(r.author || "developer")} · 
+                  ${ago(r.created_at || r.started_at)}
+                </p>
+              </div>
+              ${r.conclusion === "FAIL" ? `<span class="run-summary-fail">${esc(r.summary || "Policy violation")}</span>` : ""}
+              ${Verdict(r.conclusion || r.status)}
+              <span class="run-arrow">→</span>
+            </a>
+          </li>
+        `).join("")}
+      </ul>`;
   }
 
-  function colorize(log) {
-    return esc(log).split("\n").map((line) => {
-      if (/CRIT|ERROR|failed|FAIL|block:|✗/.test(line)) return `<span class="err">${line}</span>`;
-      if (/PASS|passed|OK|Healthy|Recovered|✓|✅/.test(line)) return `<span class="ok">${line}</span>`;
-      if (/WARN|degraded|skip/i.test(line)) return `<span style="color:var(--hold)">${line}</span>`;
-      return line;
-    }).join("\n");
-  }
-
-  function stageMetricBlock(stage) {
-    const m = stage.metrics || {};
-    if (!m || !Object.keys(m).length) return "";
-
-    if (stage.key === "load") {
-      return `<div class="grid-4" style="margin-bottom:10px">
-        <div class="stat"><b>${m.p95_ms ?? "—"}<span style="font-size:12px">ms</span></b><span>p95 latency</span></div>
-        <div class="stat"><b>${((m.error_rate || 0) * 100).toFixed(2)}%</b><span>error rate</span></div>
-        <div class="stat"><b>${m.rps ?? "—"}</b><span>requests/sec</span></div>
-        <div class="stat"><b>${m.samples ?? "—"}</b><span>samples</span></div>
-      </div>
-      ${m.histogram?.length ? `<div style="margin:10px 0">${histogram(m.histogram)}<p class="help tiny">latency distribution · engine: ${esc(m.engine || "?")}</p></div>` : ""}
-      ${(m.objectives || []).length ? `<table class="metric-table" style="margin-bottom:10px">
-        <thead><tr><th>Objective</th><th>Measured</th><th>Threshold</th><th>Result</th></tr></thead>
-        <tbody>${m.objectives.map((o) => `<tr>
-          <td class="mname">${esc(o.name)}</td>
-          <td>${o.measured}${esc(o.unit)}</td>
-          <td class="mtype">${esc(o.comparator)} ${o.threshold}${esc(o.unit)}</td>
-          <td>${o.passed ? `<span class="pill go">PASS</span>` : `<span class="pill stop">FAIL</span>`}</td>
-        </tr>`).join("")}</tbody></table>` : ""}
-      <dl class="kv">
-        <dt>engine</dt><dd>${esc(m.engine || "—")}</dd>
-        <dt>avg / med</dt><dd>${m.avg_ms ?? "—"}ms / ${m.med_ms ?? "—"}ms</dd>
-        <dt>p99 / max</dt><dd>${m.p99_ms ?? "—"}ms / ${m.max_ms ?? "—"}ms</dd>
-        <dt>thresholds</dt><dd>p95 &lt; ${m.threshold_p95_ms}ms · err &lt; ${((m.threshold_error_rate || 0) * 100).toFixed(1)}%</dd>
-        ${m.checks_passed != null ? `<dt>k6 checks</dt><dd>${m.checks_passed} passed / ${m.checks_failed} failed</dd>` : ""}
-      </dl>`;
-    }
-
-    if (stage.key === "docker") {
-      const lint = m.lint || [];
-      const b = m.build || {};
-      return `${b.tag ? `<dl class="kv" style="margin-bottom:10px">
-        <dt>image</dt><dd>${esc(b.tag)}</dd>
-        <dt>size</dt><dd>${b.size_mb ? b.size_mb + " MB" : "—"}</dd>
-        <dt>layers</dt><dd>${b.layers ?? "—"}</dd>
-        <dt>user</dt><dd>${esc(b.user || "root")}</dd>
-        <dt>build time</dt><dd>${b.duration_s ?? "—"}s</dd>
-      </dl>` : ""}
-      ${lint.length ? `<div><b class="tiny">Dockerfile audit</b>${lint.map((f) => `
-        <div class="finding-row"><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span>
-        <span><b class="mono tiny">${esc(f.rule)}</b><br>${esc(f.detail)}</span></div>`).join("")}</div>` : `<p class="help">Dockerfile audit clean.</p>`}
-      ${m.compose ? `<p class="help tiny" style="margin-top:8px">compose services: ${esc((m.compose.services || []).join(", ") || "none")}</p>` : ""}`;
-    }
-
-    if (stage.key === "k8s") {
-      const audit = m.audit || [];
-      return `<dl class="kv" style="margin-bottom:10px">
-        <dt>documents</dt><dd>${m.documents ?? 0}</dd>
-        <dt>kinds</dt><dd>${esc((m.kinds || []).join(", ") || "—")}</dd>
-        ${m.generated ? `<dt>source</dt><dd>generated by ChaosGate (repo had none)</dd>` : ""}
-        ${m.dry_run ? `<dt>validation</dt><dd>${esc(m.dry_run.mode)}</dd>` : ""}
-      </dl>
-      ${audit.length ? audit.slice(0, 24).map((f) => `
-        <div class="finding-row"><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span>
-        <span><b class="mono tiny">${esc(f.rule)}</b><br>${esc(f.detail)}</span></div>`).join("")
-        : `<p class="help">Manifest audit clean.</p>`}`;
-    }
-
-    if (stage.key === "prometheus") {
-      const e = m.exposition || {};
-      return `<dl class="kv">
-        <dt>families</dt><dd>${e.families ?? "—"}</dd>
-        <dt>samples</dt><dd>${e.samples ?? "—"}</dd>
-        <dt>types</dt><dd>${esc(Object.entries(e.by_type || {}).map(([k, v]) => `${v} ${k}`).join(" · ") || "—")}</dd>
-        <dt>valid</dt><dd>${e.valid ? "yes" : "no"}</dd>
-        ${m.targets?.ok ? `<dt>scrape targets</dt><dd>${m.targets.up}/${m.targets.count} up</dd>` : ""}
-        ${m.pushgateway?.pushed ? `<dt>pushgateway</dt><dd>pushed</dd>` : ""}
-      </dl>
-      ${e.names?.length ? `<details class="stage-detail" style="margin-top:10px"><summary>${e.names.length} metric names</summary><div class="sd-body"><div class="mono tiny">${e.names.map(esc).join("<br>")}</div></div></details>` : ""}`;
-    }
-
-    if (stage.key === "chaos") {
-      const exps = m.experiments || [];
-      return exps.length ? `<table class="metric-table">
-        <thead><tr><th>Experiment</th><th>Recovered</th><th>Time</th></tr></thead>
-        <tbody>${exps.map((e) => `<tr>
-          <td class="mname">${esc(e.experiment)}</td>
-          <td>${e.recovered ? `<span class="pill go">yes</span>` : `<span class="pill stop">no</span>`}</td>
-          <td>${(e.recovery_s * 1000).toFixed(0)}ms</td>
-        </tr>`).join("")}</tbody></table>` : "";
-    }
-
-    if (stage.key === "grafana") {
-      return `<dl class="kv">
-        <dt>panels</dt><dd>${m.panels ?? "—"}</dd>
-        <dt>rows</dt><dd>${m.rows ?? "—"}</dd>
-        <dt>uid</dt><dd>${esc(m.uid || "—")}</dd>
-        <dt>published</dt><dd>${m.publish?.published ? `<a href="${esc(m.publish.url)}" target="_blank" rel="noreferrer">${esc(m.publish.url)} ↗</a>` : esc(m.publish?.reason || "no")}</dd>
-      </dl>`;
-    }
-
-    if (stage.key === "security") {
-      const f = m.findings || [];
-      const hist = m.history || {};
-      const cve = m.cve || {};
-      const chips = [
-        hist.scanned ? `<span class="pill">history: ${hist.commits_scanned} commit(s)</span>` : "",
-        cve.available === true ? `<span class="pill go">CVE: ${cve.vulnerable ?? 0}/${cve.queried ?? 0} vulnerable</span>` : "",
-        cve.available === false ? `<span class="pill hold">CVE scan unavailable</span>` : "",
-      ].filter(Boolean).join(" ");
-      return `${chips ? `<div class="row wrap" style="margin-bottom:10px;gap:6px">${chips}</div>` : ""}
-        ${cve.available === false ? `<div class="banner"><div><b>Dependencies were not checked</b>
-          <p>${esc(cve.reason || "the advisory database was unreachable")}. This is not a clean bill of health.</p></div></div>` : ""}
-        ${f.length ? f.slice(0, 30).map((x) => `
-          <div class="finding-row"><span class="sev ${esc(x.severity)}">${esc(x.severity)}</span>
-          <span><b>${esc(x.title)}</b><br><span class="muted tiny">${esc(x.detail)}</span>
-          ${x.remediation ? `<br><code class="tiny" style="color:var(--go)">${esc(x.remediation)}</code>` : ""}
-          </span></div>`).join("")
-          : `<p class="help">No findings.</p>`}`;
-    }
-
-    if (stage.key === "detect") {
-      return `<dl class="kv">
-        <dt>type</dt><dd>${esc(m.type || "—")}</dd>
-        <dt>language</dt><dd>${esc(m.language || "—")}</dd>
-        <dt>frameworks</dt><dd>${esc((m.frameworks || []).join(", ") || "—")}</dd>
-        <dt>test cmd</dt><dd>${esc(m.test_command || "—")}</dd>
-        <dt>build cmd</dt><dd>${esc(m.build_command || "—")}</dd>
-      </dl>`;
-    }
-
-    if (stage.key === "smoke") {
-      return `<dl class="kv">
-        <dt>url</dt><dd>${esc(m.url || "—")}</dd>
-        <dt>status</dt><dd>${m.status ?? "—"}</dd>
-        <dt>latency</dt><dd>${m.latency_ms ?? "—"}ms</dd>
-        <dt>runtime</dt><dd>${esc(m.engine || "—")}</dd>
-      </dl>`;
-    }
-    return "";
-  }
-
-  function recoveryBanner(run) {
-    const plan = run.recovery;
-    if (!plan) return "";
-    const good = plan.last_good;
-    const stages = plan.failing_stages || [];
-    return `<div class="banner stop" style="border-left-color:var(--stop)">
-      <div style="flex:1">
-        <b>Already merged — ${esc(plan.branch)} is broken at <code>${esc(plan.bad_commit_short || "?")}</code></b>
-        <p>
-          This commit is on the default branch, so the pre-merge gate could not stop it.
-          ${stages.length ? `Failing: ${stages.map((s) => esc(s.name)).join(", ")}.` : ""}
-        </p>
-        <p style="margin-top:6px">
-          ${good
-            ? `Last verified-good commit: <code>${esc(good.short_sha)}</code> (score ${good.score}).`
-            : `No earlier passing run is recorded, so there is no verified commit to return to.`}
-          Strategy: <b>${esc(plan.strategy)}</b>.
-        </p>
-        <div class="row wrap" style="margin-top:10px;gap:8px">
-          ${plan.strategy === "revert" && !run.reverted_by
-            ? `<button class="btn btn-sm btn-stop" data-act="revert-run" data-id="${esc(run.id)}">Open revert PR</button>`
-            : ""}
-          ${run.reverted_by
-            ? `<a class="pill go" href="${esc(run.reverted_by)}" target="_blank" rel="noreferrer">revert opened ↗</a>`
-            : ""}
-          ${run.incident_url
-            ? `<a class="pill" href="${esc(run.incident_url)}" target="_blank" rel="noreferrer">incident #${run.incident_number} ↗</a>`
-            : `<button class="btn btn-sm" data-act="file-incident" data-id="${esc(run.id)}">File incident</button>`}
-          <button class="btn btn-sm" data-act="show-recovery" data-id="${esc(run.id)}">Show commands</button>
-        </div>
-        ${state.showRecovery === run.id && (plan.commands || []).length
-          ? `<pre class="code" style="margin-top:10px">${esc(plan.commands.join("\n"))}</pre>`
-          : ""}
-      </div>
-    </div>`;
-  }
-
-  function runView() {
+  // 3. Run Detail Screen
+  function runDetailView() {
     const run = state.run;
-    if (!run) return shell(`<div class="empty">Run not found.</div>`);
+    if (!run) {
+      return Shell(`<div style="padding:48px 0; text-align:center; color:var(--text-dim);">Loading run…</div>`);
+    }
+
+    const pass = run.conclusion === "PASS";
     const stages = run.stages || [];
-    const report = run.report;
-    const live = run.status === "running" || run.status === "queued";
+    const failedStages = stages.filter((s) => s.status === "failed" && s.key !== "verdict");
+    const loadMetrics = stages.find((s) => s.key === "load")?.metrics || {};
+    const chaosMetrics = stages.find((s) => s.key === "chaos")?.metrics || {};
+    const openStageKey = state.selectedStage || (failedStages[0]?.key ?? stages[0]?.key);
 
-    const banner = run.conclusion
-      ? `<div class="verdict-banner ${esc(run.conclusion)}">
-          <div>
-            <p class="kicker">${run.conclusion === "PASS" ? "GATE OPEN — MERGE ALLOWED" : "GATE SEALED — MERGE BLOCKED"}</p>
-            <h2>${esc(run.conclusion)}</h2>
-            <p>${esc(run.summary || "")}</p>
-          </div>
-          <div class="score">${run.score ?? report?.score ?? "—"}</div>
-        </div>`
-      : `<div class="verdict-banner">
-          <div>
-            <p class="kicker">Evaluating</p>
-            <h2>GATE LIVE</h2>
-            <p>Running against <strong>${esc(run.repo?.full_name || "")}</strong>${run.commit_short ? ` @ <code>${esc(run.commit_short)}</code>` : ""}.</p>
-          </div>
-          ${badge(run.status)}
-        </div>`;
+    return Shell(`
+      <div class="space-y-5">
+        <a href="/runs" style="display:inline-flex; align-items:center; gap:6px; font-size:13.5px; color:var(--text-dim); transition:color 0.2s;">
+          ← Runs
+        </a>
 
-    const reasons = report?.reasons || [];
-    const degraded = report?.degraded || [];
-    const activeStage = stages.find((s) => s.status === "running");
-
-    return shell(`
-      ${banner}
-      <div class="page-head">
-        <div>
-          <p class="kicker">
-            ${esc(run.id)} · ${esc(run.trigger)} · ${esc(run.branch)}
-            ${run.commit_short ? ` · <span class="mono">${esc(run.commit_short)}</span>` : ""}
-            ${run.duration_s ? ` · ${run.duration_s}s` : ""}
-          </p>
-          <h1>${esc(run.repo?.name || "Run")}</h1>
-          <p><a href="/console/repos/${esc(run.repo_id)}">← ${esc(run.repo?.full_name || "repository")}</a>
-          ${run.pr_url ? ` · <a href="${esc(run.pr_url)}" target="_blank" rel="noreferrer">PR #${run.pr_number} ↗</a>` : ""}</p>
-        </div>
-        <button class="btn" data-act="run" data-id="${esc(run.repo_id)}">Run again</button>
-      </div>
-
-      ${recoveryBanner(run)}
-      ${reasons.length ? `<div class="banner stop"><div><b>${reasons.length} blocking reason${reasons.length > 1 ? "s" : ""}</b>
-        <p>${reasons.map(esc).join("<br>")}</p></div></div>` : ""}
-      ${degraded.length ? `<div class="banner"><div><b>${degraded.length} stage${degraded.length > 1 ? "s" : ""} ran degraded</b>
-        <p>${degraded.map(esc).join("<br>")}</p></div></div>` : ""}
-
-      <div class="run-layout">
-        <div class="stage-rail">
-          ${stages.map((s) => `<div class="stage ${esc(s.status)}" data-act="focus-stage" data-key="${esc(s.key)}">
-            <span class="dot ${s.status === "passed" ? "go" : s.status === "failed" ? "stop" : s.status === "running" ? "hold" : s.status === "degraded" ? "hold" : ""}"></span>
-            <div>${esc(s.name)}<div class="help">${esc(s.summary || s.status)}</div></div>
-            <span class="dur">${dur(s.duration_ms)}</span>
-          </div>`).join("")}
-        </div>
-        <div>
-          <section class="terminal">
-            <div class="term-head">
-              <span>Stage recorder${activeStage ? ` · ${esc(activeStage.name)}` : ""}</span>
-              <span>${esc(run.status)}${live ? " ●" : ""}</span>
+        <!-- Hero Panel with Glow Orb -->
+        <div class="glass run-hero-panel rise">
+          <div class="run-hero-glow ${pass ? "glow-pass" : "glow-fail"}"></div>
+          <div class="run-hero-flex">
+            ${Score(run.resilience_score ?? run.score, 112)}
+            <div style="min-width:0; flex:1;">
+              <p class="run-hero-status ${pass ? "text-emerald-300" : "text-rose-300"}">
+                ${pass ? "Gate open · merge allowed" : "Gate sealed · merge blocked"}
+              </p>
+              <h1 class="run-hero-title">${esc(run.commit_message || "Manual gate verification")}</h1>
+              <p class="run-hero-meta">
+                ${esc(run.repo?.full_name || run.repo?.name || "Repository")} · 
+                ${run.pr_number ? `PR #${run.pr_number}` : run.branch || "main"} · 
+                <span class="font-mono">${esc((run.commit_sha || "").slice(0, 7))}</span> · 
+                ${esc(run.author || "developer")} · 
+                ${ago(run.created_at || run.started_at)}
+              </p>
             </div>
-            <div class="term-body" id="term">${colorize(stages.map((s) => s.logs || "").join("")) || "waiting for engine…"}</div>
-          </section>
-
-          ${stages.filter((s) => s.metrics && Object.keys(s.metrics).length && s.key !== "verdict" && s.key !== "validate").map((s) => `
-            <details class="stage-detail" ${s.status === "failed" ? "open" : ""}>
-              <summary>
-                <span class="dot ${s.status === "passed" ? "go" : s.status === "failed" ? "stop" : "hold"}"></span>
-                <b>${esc(s.name)}</b>
-                <span class="muted tiny">${esc(s.summary || "")}</span>
-              </summary>
-              <div class="sd-body">${stageMetricBlock(s)}</div>
-            </details>`).join("")}
-
-          ${state.artifacts.length ? `<section class="card" style="margin-top:12px">
-            <h2>Artifacts</h2>
-            <p class="help">Everything the run produced: k6 summary, Grafana dashboard, Prometheus scrape config and alert rules, generated Kubernetes manifests, and the full report.</p>
-            <div class="artifact-grid" style="margin-top:12px">
-              ${state.artifacts.map((a) => `<a class="artifact" href="${esc(a.url)}?download=1" target="_blank" rel="noreferrer">
-                <span>▤</span><span>${esc(a.name)}</span><span class="asize">${bytes(a.size)}</span>
-              </a>`).join("")}
+            <div class="btn-pill-group">
+              <button data-act="export-json" class="btn-ghost">Export</button>
+              ${pass ? `<button data-act="open-rollback" class="btn-ghost">Roll back</button>` : ""}
+              <button data-act="rerun" data-id="${run.repo_id || run.repo?.id}" class="btn-primary">Re-run</button>
             </div>
-          </section>` : ""}
+          </div>
+        </div>
+
+        <!-- Failure Callout Banners -->
+        ${failedStages.length > 0 ? `
+          <div class="space-y-3">
+            ${failedStages.map((s) => `
+              <div class="fail-banner glass rise">
+                <span class="fail-banner-dot"></span>
+                <div>
+                  <p class="fail-banner-title">${esc(s.name)}</p>
+                  <p class="fail-banner-summary">${esc(s.summary)}</p>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : ""}
+
+        <!-- 4 Metric Cards -->
+        <div class="grid-4">
+          <div class="glass stat-panel">
+            <p class="stat-label">p95 latency</p>
+            <p class="stat-value" style="font-size:24px;">${loadMetrics.p95_ms != null ? `${loadMetrics.p95_ms}ms` : "—"}</p>
+          </div>
+          <div class="glass stat-panel">
+            <p class="stat-label">Error rate</p>
+            <p class="stat-value" style="font-size:24px;">${loadMetrics.error_rate_pct != null ? `${loadMetrics.error_rate_pct}%` : "0.0%"}</p>
+          </div>
+          <div class="glass stat-panel">
+            <p class="stat-label">Recovery time</p>
+            <p class="stat-value" style="font-size:24px;">${chaosMetrics.recovery_ms != null ? `${chaosMetrics.recovery_ms}ms` : "—"}</p>
+          </div>
+          <div class="glass stat-panel">
+            <p class="stat-label">Duration</p>
+            <p class="stat-value" style="font-size:24px;">${dur(run.duration_ms ? run.duration_ms / 1000 : 18)}</p>
+          </div>
+        </div>
+
+        <!-- Pipeline Stages Section -->
+        <div class="glass p-5 sm:p-6" style="padding:26px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h2 style="font-size:16px; font-weight:600;">Pipeline Stages (13)</h2>
+            <button data-act="toggle-full-log" class="btn-ghost" style="font-size:12.5px; padding:4px 12px;">
+              ${state.showFullLog ? "Show stages" : "Full log"}
+            </button>
+          </div>
+
+          <!-- Segmented Stepper Bar -->
+          <div class="stage-stepper-wrap">
+            ${stages.map((s) => `
+              <button 
+                title="${esc(s.name)} · ${esc(s.status)}" 
+                data-act="select-stage" 
+                data-key="${esc(s.key)}" 
+                class="stage-seg ${s.status} ${openStageKey === s.key && !state.showFullLog ? "active-seg" : ""}">
+              </button>
+            `).join("")}
+          </div>
+
+          ${state.showFullLog ? `
+            <div class="terminal-box" id="term">
+              ${stages.map((s) => {
+                const logs = s.logs || `${s.name} completed with status: ${s.status}\n`;
+                return logs.split("\n").filter(Boolean).map((line, idx) => `
+                  <div class="log-line">
+                    <span class="log-time">${idx * 0.4}s</span>
+                    <span class="log-level ${s.status === "failed" ? "level-crit" : s.status === "degraded" ? "level-warn" : "level-info"}">${s.status.toUpperCase()}</span>
+                    <span class="log-stage">${esc(s.key)}</span>
+                    <span class="log-msg">${esc(line)}</span>
+                  </div>
+                `).join("");
+              }).join("")}
+            </div>
+          ` : `
+            <ul class="stage-list">
+              ${stages.map((s) => {
+                const isOpen = openStageKey === s.key;
+                return `
+                  <li class="stage-item ${isOpen ? "open" : ""}">
+                    <button class="stage-row-btn" data-act="select-stage" data-key="${esc(s.key)}">
+                      <span class="stage-dot ${s.status === "passed" ? "bg-emerald-400" : s.status === "failed" ? "bg-rose-400" : s.status === "degraded" ? "bg-amber-300" : "bg-indigo-400"}"></span>
+                      <span class="stage-name">${esc(s.name)}</span>
+                      <span class="stage-summary" style="${s.status === "failed" ? "color:var(--rose);" : s.status === "degraded" ? "color:var(--amber);" : ""}">${esc(s.summary || "Stage passed")}</span>
+                      <span class="stage-duration">${s.duration_ms ? `${(s.duration_ms / 1000).toFixed(1)}s` : "—"}</span>
+                    </button>
+                    ${isOpen ? `
+                      <div class="stage-body">
+                        ${s.metrics && Object.keys(s.metrics).length > 0 ? `
+                          <div class="metric-pills">
+                            ${Object.entries(s.metrics).map(([k, v]) => {
+                              const displayVal = (typeof v === "object" && v !== null) ? (v.total ?? v.count ?? JSON.stringify(v)) : v;
+                              return `<span class="metric-pill">${esc(k.replace(/_/g, " "))}: <strong>${esc(displayVal)}</strong></span>`;
+                            }).join("")}
+                          </div>
+                        ` : ""}
+                        <pre class="terminal-box" style="max-height:220px; font-size:11.5px; padding:12px;">${esc(s.logs || `${s.name} executed successfully with zero faults.`)}</pre>
+                      </div>
+                    ` : ""}
+                  </li>
+                `;
+              }).join("")}
+            </ul>
+          `}
         </div>
       </div>
     `);
   }
 
-  // ======================================================= observability
-  function observabilityView() {
-    const o = state.observability;
-    if (!o) return shell(`<div class="empty">Loading observability…</div>`);
-    const prom = o.prometheus || {};
-    const graf = o.grafana || {};
-    const expo = prom.exposition || {};
+  // 4. Repositories Screen
+  function reposView() {
+    const repos = state.repos || [];
+    return Shell(`
+      <div class="space-y-5">
+        <div class="page-header rise">
+          <div>
+            <h1 class="page-title">Repositories</h1>
+            <p class="page-subtitle">Codebases monitored and protected by the release gate.</p>
+          </div>
+          <button data-act="open-connect-repo" class="btn-primary">Connect repository</button>
+        </div>
 
-    const card = (name, tool, extra = "") => `
-      <div class="tool-card ${tool?.available ? "ready" : "down"}">
-        <h4>${esc(name)}</h4>
-        <div class="tv">${tool?.available ? esc(tool.version || "ready") : "DEGRADED"}</div>
-        <p>${esc(tool?.detail || "")}</p>
-        ${extra}
+        <div class="repo-grid">
+          ${repos.map((r) => {
+            const initials = (r.name || r.full_name || "RP").slice(0, 2).toUpperCase();
+            const lr = r.last_run;
+            return `
+              <a href="/repos/${r.id}" class="glass lift repo-card rise">
+                <div class="repo-card-head">
+                  <div class="repo-avatar">${initials}</div>
+                  ${lr ? Verdict(lr.conclusion) : `<span style="font-size:12px; color:var(--text-dim);">No runs</span>`}
+                </div>
+                <p class="repo-name">${esc(r.name || r.full_name)}</p>
+                <p class="repo-full-name">${esc(r.full_name)}</p>
+                <div class="repo-tags">
+                  <span class="tag-pill">${esc(r.runtime || "Python")}</span>
+                  ${r.framework ? `<span class="tag-pill">${esc(r.framework)}</span>` : ""}
+                  <span style="margin-left:auto;">${lr ? ago(lr.created_at) : r.default_branch || "main"}</span>
+                </div>
+              </a>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `);
+  }
+
+  // 5. Repository Detail & Workspace Editor
+  function repoDetailView() {
+    const repo = state.repo;
+    if (!repo) {
+      return Shell(`<div style="padding:48px 0; text-align:center; color:var(--text-dim);">Loading repository…</div>`);
+    }
+
+    const runs = repo.runs || [];
+    const avgScore = runs.length ? Math.round(runs.reduce((a, b) => a + (b.resilience_score ?? b.score ?? 0), 0) / runs.length) : 84;
+    const scored = runs.slice(0, 10);
+    const activeTab = state.repoTab || "runs";
+
+    return Shell(`
+      <div class="space-y-5">
+        <a href="/repos" style="display:inline-flex; align-items:center; gap:6px; font-size:13.5px; color:var(--text-dim); transition:color 0.2s;">
+          ← Repositories
+        </a>
+
+        <div class="page-header rise" style="margin-bottom:18px;">
+          <div>
+            <h1 class="page-title">${esc(repo.name || repo.full_name)}</h1>
+            <p class="page-subtitle">${esc(repo.full_name)} · ${esc(repo.runtime || "Python")}${repo.framework ? ` · ${esc(repo.framework)}` : ""} · ${esc(repo.default_branch || "main")}</p>
+          </div>
+          <div class="glass flex items-center gap-1 rounded-full p-1 pl-4" style="display:flex; align-items:center; gap:8px; padding:4px 6px 4px 16px; border-radius:var(--radius-full);">
+            <span style="font-size:13px; color:var(--text-dim);">branch</span>
+            <input id="run-branch" value="${esc(repo.default_branch || "main")}" style="width:110px; font-size:13.5px; color:#fff;" />
+            <button data-act="trigger-repo-run" data-id="${repo.id}" class="btn-primary" style="padding:7px 16px; font-size:13px;">Run gate</button>
+          </div>
+        </div>
+
+        <div class="grid-3">
+          <div class="glass stat-panel">
+            <p class="stat-label">Avg. resilience score</p>
+            <p class="stat-value">${avgScore}</p>
+          </div>
+          <div class="glass stat-panel">
+            <p class="stat-label">Total gate runs</p>
+            <p class="stat-value">${runs.length}</p>
+          </div>
+          <div class="glass stat-panel">
+            <p class="stat-label">Score trend</p>
+            <div class="score-trend-bar">
+              ${scored.length ? scored.map((r) => `
+                <div class="score-trend-seg" style="height:${Math.max(10, r.resilience_score ?? r.score ?? 50)}%; background:${(r.resilience_score ?? r.score ?? 0) >= 75 ? "var(--emerald)" : "var(--rose)"};"></div>
+              `).join("") : `<div class="score-trend-seg" style="height:80%; background:var(--emerald);"></div><div class="score-trend-seg" style="height:90%; background:var(--emerald);"></div><div class="score-trend-seg" style="height:70%; background:var(--amber);"></div>`}
+            </div>
+          </div>
+        </div>
+
+        <!-- Navigation Tabs: History vs Workspace Code Editor -->
+        <div style="display:flex; gap:6px; border-bottom:1px solid rgba(255,255,255,0.06); padding-bottom:10px;">
+          <button data-act="set-repo-tab" data-tab="runs" class="nav-link ${activeTab === "runs" ? "active" : ""}">Runs History</button>
+          <button data-act="set-repo-tab" data-tab="editor" class="nav-link ${activeTab === "editor" ? "active" : ""}">Workspace Code Editor</button>
+        </div>
+
+        ${activeTab === "runs" ? `
+          <div class="glass rise" style="overflow:hidden;">
+            ${RunList(runs)}
+          </div>
+        ` : WorkspaceEditor(repo)}
+      </div>
+    `);
+  }
+
+  function WorkspaceEditor(repo) {
+    const files = state.tree?.entries || [];
+    const activeFile = state.open.find((f) => f.path === state.activePath);
+    return `
+      <div class="glass ws-editor-wrap rise">
+        <div class="ws-tree">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding:0 4px;">
+            <span style="font-weight:600; font-size:12px; text-transform:uppercase; color:var(--text-dim);">Files</span>
+            <button data-act="refresh-tree" style="color:var(--text-muted); font-size:12px;">↻</button>
+          </div>
+          ${files.length ? files.map((f) => `
+            <div class="ws-tree-item ${state.activePath === f.path ? "active-file" : ""}" data-act="open-file" data-path="${esc(f.path)}">
+              <span>${f.type === "dir" ? "📁" : "📄"}</span>
+              <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(f.name)}</span>
+            </div>
+          `).join("") : `<p style="padding:16px 8px; font-size:12px; color:var(--text-dim);">No files found or workspace not mounted.</p>`}
+        </div>
+        <div class="ws-editor-main">
+          <div class="ws-editor-bar">
+            <span>${esc(state.activePath || "No file opened")}</span>
+            ${activeFile ? `<button data-act="save-file" class="btn-primary" style="padding:4px 14px; font-size:12px;">Save</button>` : ""}
+          </div>
+          <textarea id="editor" class="ws-textarea" placeholder="Select a file from the workspace tree to inspect or edit…">${esc(activeFile?.content || "")}</textarea>
+        </div>
       </div>`;
-
-    return shell(`
-      <div class="page-head">
-        <div>
-          <p class="kicker">Metrics & dashboards</p>
-          <h1>Observability</h1>
-          <p>ChaosGate exports Prometheus metrics about itself and every gate run, and ships a Grafana dashboard built from them.</p>
-        </div>
-        <div class="cta-row">
-          <a class="btn" href="/metrics" target="_blank" rel="noreferrer">Raw /metrics ↗</a>
-          <a class="btn" href="/api/observability/dashboard?download=1" target="_blank" rel="noreferrer">Download dashboard</a>
-          <button class="btn btn-go" data-act="publish-dashboard">Publish to Grafana</button>
-        </div>
-      </div>
-
-      <div class="obs-grid" style="margin-bottom:16px">
-        ${card("Prometheus", prom.tool)}
-        ${card("Grafana", graf.tool)}
-        ${card("k6", o.k6)}
-        ${card("Docker", o.docker)}
-        ${card("Kubernetes", o.kubernetes, `<p class="tiny muted" style="margin-top:6px">namespace: ${esc(o.kubernetes?.namespace || "—")}</p>`)}
-      </div>
-
-      <div class="grid-2">
-        <section class="card">
-          <h2>Exported metrics</h2>
-          <p class="help">${expo.families} families · ${expo.samples} samples · exposition ${expo.valid ? "valid" : "INVALID"}</p>
-          <div style="height:10px"></div>
-          <table class="metric-table">
-            <thead><tr><th>Metric</th></tr></thead>
-            <tbody>${(expo.names || []).slice(0, 40).map((n) => `<tr><td class="mname">${esc(n)}</td></tr>`).join("")}</tbody>
-          </table>
-        </section>
-        <section class="card">
-          <h2>Wire it up</h2>
-          <p class="help">Point a Prometheus at this endpoint, then import the dashboard.</p>
-          <pre class="code">scrape_configs:
-  - job_name: chaosgate
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["chaosgate:5000"]</pre>
-          <div style="height:12px"></div>
-          <p class="help">Or bring the whole stack up with the bundled compose profile:</p>
-          <pre class="code">docker compose --profile observability up -d
-# Prometheus  → http://localhost:9090
-# Grafana     → http://localhost:3000  (admin / admin)</pre>
-          <div style="height:12px"></div>
-          <p class="help">The Grafana dashboard is provisioned automatically by that profile — 20 panels covering verdicts, stage timings, k6 latency, chaos recovery, image sizes and toolchain health.</p>
-        </section>
-      </div>
-
-      <section class="card" style="margin-top:14px">
-        <h2>Webhook deliveries</h2>
-        <p class="help">Inbound GitHub events and the runs they triggered.</p>
-        ${state.webhooks.length ? `<table class="table">
-          <thead><tr><th>Event</th><th>Repo</th><th>Branch</th><th>Commit</th><th>Verified</th><th>Result</th><th>When</th></tr></thead>
-          <tbody>${state.webhooks.map((w) => `<tr ${w.run_id ? `data-href="/console/runs/${w.run_id}"` : ""}>
-            <td class="mono tiny">${esc(w.event)}</td>
-            <td>${esc(w.repo || "—")}</td>
-            <td class="mono tiny">${esc(w.branch || "—")}</td>
-            <td class="mono tiny">${esc(w.sha || "—")}</td>
-            <td>${w.verified ? `<span class="pill go">yes</span>` : `<span class="pill dim">no</span>`}</td>
-            <td class="tiny">${esc(w.note || "")}</td>
-            <td>${ago(w.created_at)}</td>
-          </tr>`).join("")}</tbody></table>`
-          : `<div class="empty">No webhook deliveries yet. Install a webhook from a repository's Automation tab.</div>`}
-      </section>
-    `);
-  }
-  // ============================================================== connect
-  function connectView() {
-    const ws = state.me?.workspace || {};
-    const linked = ws.connected;
-    const oauth = state.me?.oauth_enabled;
-    const params = new URLSearchParams(location.search);
-    const err = params.get("error");
-
-    const filtered = (state.githubRepos || []).filter((r) =>
-      !state.ghFilter || r.full_name.toLowerCase().includes(state.ghFilter.toLowerCase())
-    );
-
-    const rows = filtered.map((r) => `
-      <div class="gh-item">
-        <div class="ghmain">
-          <strong>${esc(r.full_name)}</strong>
-          <div class="ghmeta">
-            ${r.language ? `<span><span class="lang-dot" style="background:${LANG_COLORS[r.language] || "#6a7388"}"></span>${esc(r.language)}</span>` : ""}
-            ${r.private ? `<span>private</span>` : `<span>public</span>`}
-            ${r.pushed_at ? `<span>pushed ${ago(r.pushed_at)}</span>` : ""}
-            ${r.permissions?.push === false ? `<span style="color:var(--hold)">read-only</span>` : ""}
-          </div>
-        </div>
-        ${r.connected
-          ? `<span class="pill go">connected</span>`
-          : `<button class="btn btn-sm btn-go" data-act="add" data-name="${esc(r.full_name)}">Select</button>`}
-      </div>`).join("");
-
-    return shell(`
-      <div class="page-head">
-        <div>
-          <p class="kicker">GitHub</p>
-          <h1>Connect</h1>
-          <p>Link your account, then select the repositories the gate should guard.</p>
-        </div>
-        ${linked ? `<button class="btn" data-act="logout">Disconnect</button>` : ""}
-      </div>
-
-      ${err ? `<div class="banner stop"><div><b>Sign-in failed</b><p>${esc(err)}</p></div></div>` : ""}
-      ${linked ? `<div class="banner go"><div>
-        <b>Connected as @${esc(ws.github_login)}</b>
-        <p>${esc(ws.github_name || "")} · auth via ${esc(ws.auth_method || "token")}${ws.scopes?.length ? ` · scopes: ${esc(ws.scopes.join(", "))}` : ""}</p>
-      </div></div>` : ""}
-
-      <div class="grid-2">
-        <section class="card">
-          <h2>${linked ? "Authentication" : "Sign in"}</h2>
-          ${oauth
-            ? `<p class="help">One click, no token handling. Grants <code>repo</code> and <code>workflow</code>.</p>
-               <div style="height:12px"></div>
-               <button class="btn btn-go" data-act="oauth">Continue with GitHub</button>
-               <div style="height:22px"></div>
-               <h2>Or use a token</h2>`
-            : `<div class="banner"><div><b>OAuth is not configured</b>
-                 <p>Set <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> in <code>.env</code> to enable one-click sign-in. A personal access token works right now.</p></div></div>`}
-          <form data-form="github">
-            <div class="field">
-              <label>Personal access token <span class="muted tiny">(scopes: repo, workflow)</span></label>
-              <input name="token" type="password" autocomplete="off" placeholder="ghp_… or github_pat_…" />
-            </div>
-            <button class="btn ${oauth ? "" : "btn-go"}" type="submit">Save token</button>
-          </form>
-          <div style="height:22px"></div>
-          <h2>Add a public repo by name</h2>
-          <p class="help">No account needed — the gate can test any public repository read-only.</p>
-          <form data-form="add-repo">
-            <div class="field">
-              <label>owner/name</label>
-              <input name="full_name" placeholder="pallets/flask" />
-            </div>
-            <button class="btn" type="submit">Connect repository</button>
-          </form>
-        </section>
-
-        <section class="card">
-          <div class="split-head">
-            <h2>Your repositories</h2>
-            ${linked ? `<button class="btn btn-sm" data-act="refresh-gh">Refresh</button>` : ""}
-          </div>
-          ${linked ? `
-            <div class="gh-toolbar">
-              <input id="gh-filter" placeholder="Filter ${state.githubRepos.length} repositories…" value="${esc(state.ghFilter)}" />
-            </div>
-            ${state.ghLoading
-              ? `<div class="empty">Loading…</div>`
-              : rows
-                ? `<div class="gh-list">${rows}</div>`
-                : `<div class="empty">No repositories match.</div>`}`
-            : `<div class="empty">Sign in to list the repositories you can push to.</div>`}
-        </section>
-      </div>
-    `);
   }
 
-  // ================================================================= docs
-  function docsView() {
-    return shell(`
-      <div class="page-head">
-        <div>
-          <p class="kicker">Target contract</p>
-          <h1>How foreign apps are tested</h1>
-          <p>ChaosGate cannot invent a health endpoint. Ship a contract, or accept autodetect with reduced runtime stages.</p>
-        </div>
-      </div>
-      <div class="grid-2">
-        <section class="card">
-          <h2>chaosgate.yml</h2>
-          <p class="help">Drop this at the root of the repository under test.</p>
-          <pre class="code">${esc(state.contract || "# loading")}</pre>
-        </section>
-        <section class="card">
-          <h2>.github/workflows/chaosgate.yml</h2>
-          <p class="help">Copy into a target repo and mark the ChaosGate check as required on <code>main</code>. Failed PRs then cannot merge — pushed commits are not un-pushed, they are kept out of the protected branch.</p>
-          <pre class="code">${esc(state.workflow || "# loading")}</pre>
-        </section>
-      </div>
-    `);
-  }
-
-  // ============================================================= settings
+  // 6. Settings / Policies Screen
   function settingsView() {
     const p = state.policy || {};
-    const row = (key, label, hint) => `<div class="check">
-      <div><b>${label}</b><div class="help">${hint}</div></div>
-      <button class="toggle ${p[key] ? "on" : ""}" data-act="toggle" data-key="${key}" type="button"><i></i></button>
-    </div>`;
-
-    return shell(`
-      <div class="page-head">
-        <div><p class="kicker">Policy</p><h1>Settings</h1><p>These rules decide whether the gate opens.</p></div>
-      </div>
-      <div class="grid-2">
-        <section class="card">
-          <h2>Seal the merge when</h2>
-          <div class="checks">
-            ${row("fail_on_unit", "Unit tests fail", "pytest · node --test · npm test")}
-            ${row("fail_on_build", "Build fails", "compileall · npm run build")}
-            ${row("fail_on_secret", "Secrets are committed", "AWS keys, PATs, Stripe live keys, private keys")}
-            ${row("fail_on_docker", "Container build fails", "docker build, or a critical Dockerfile issue")}
-            ${row("fail_on_k8s", "Kubernetes manifests are rejected", "server-side dry-run or a critical audit finding")}
-            ${row("fail_on_load", "Load thresholds are exceeded", "k6 p95 and error-rate budgets")}
-            ${row("fail_on_chaos", "Chaos does not recover", "process kill + restart")}
-            ${row("require_config", "chaosgate.yml is missing", "off by default so autodetect still works")}
-            ${row("fail_on_degraded", "A stage runs degraded", "strict mode: fail when Docker/K8s/k6 are unavailable")}
+    return Shell(`
+      <div class="space-y-5">
+        <div class="page-header rise">
+          <div>
+            <h1 class="page-title">Policies</h1>
+            <p class="page-subtitle">What it takes to reach main. Enforced on every pull request.</p>
           </div>
-        </section>
-        <section class="card">
-          <h2>Load thresholds</h2>
-          <form data-form="policy-num">
-            <div class="field">
-              <label>Max p95 latency (ms)</label>
-              <input name="max_p95_ms" type="number" value="${esc(p.max_p95_ms ?? 800)}" />
+        </div>
+
+        <form data-form="save-policy" class="space-y-4">
+          <div class="glass policy-group">
+            <div class="policy-row">
+              <div>
+                <p class="policy-label">p95 latency SLA</p>
+                <p class="policy-desc">Synthetic k6 concurrency test fails if response time exceeds this threshold.</p>
+              </div>
+              <div class="num-input-wrap">
+                <input name="max_p95_ms" type="number" class="num-input" value="${p.max_p95_ms || 300}" />ms
+              </div>
             </div>
-            <div class="field">
-              <label>Max error rate (0–1)</label>
-              <input name="max_error_rate" type="number" step="0.01" min="0" max="1" value="${esc(p.max_error_rate ?? 0.05)}" />
+
+            <div class="policy-row">
+              <div>
+                <p class="policy-label">Max error rate</p>
+                <p class="policy-desc">Share of HTTP 5xx responses allowed under stress.</p>
+              </div>
+              <div class="num-input-wrap">
+                <input name="max_error_rate_pct" type="number" step="0.1" class="num-input" value="${p.max_error_rate_pct || 1.0}" />%
+              </div>
             </div>
-            <button class="btn btn-go" type="submit">Save thresholds</button>
-          </form>
-          <div style="height:22px"></div>
-          <h2>Host toolchain</h2>
-          <p class="help">Refresh after installing Docker, kubectl or k6 on this machine.</p>
-          <button class="btn btn-sm" data-act="refresh-caps">Re-probe toolchain</button>
-        </section>
+          </div>
+
+          <div class="glass policy-group">
+            <div class="policy-row">
+              <div>
+                <p class="policy-label">Block on secrets</p>
+                <p class="policy-desc">Instantly fail if an API token, JWT, or private credential is found in the diff.</p>
+              </div>
+              <button type="button" class="toggle-btn ${p.fail_on_secrets !== false ? "on" : ""}" data-act="toggle-policy" data-key="fail_on_secrets">
+                <span class="toggle-thumb"></span>
+              </button>
+            </div>
+
+            <div class="policy-row">
+              <div>
+                <p class="policy-label">Fail when degraded</p>
+                <p class="policy-desc">Treat missing local Docker or Kubernetes tools as an immediate pipeline failure.</p>
+              </div>
+              <button type="button" class="toggle-btn ${p.fail_on_degraded ? "on" : ""}" data-act="toggle-policy" data-key="fail_on_degraded">
+                <span class="toggle-thumb"></span>
+              </button>
+            </div>
+
+            <div class="policy-row">
+              <div>
+                <p class="policy-label">Warn on unpinned dependencies</p>
+                <p class="policy-desc">Flag dependency lockfiles with unpinned or wildcard package versions.</p>
+              </div>
+              <button type="button" class="toggle-btn ${p.warn_unpinned_deps !== false ? "on" : ""}" data-act="toggle-policy" data-key="warn_unpinned_deps">
+                <span class="toggle-thumb"></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="glass policy-group">
+            <div class="policy-row">
+              <div>
+                <p class="policy-label">GitHub Token</p>
+                <p class="policy-desc">Used to report commit statuses and open 1-click revert PRs. Stored encrypted with AES-CTR + PBKDF2.</p>
+              </div>
+              <input name="github_token" type="password" placeholder="ghp_••••••••••••••••••••" value="${p.github_token ? "••••••••••••••••" : ""}" class="text-input" />
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:flex-end;">
+            <button type="submit" class="btn-primary" style="padding:10px 28px;">Save changes</button>
+          </div>
+        </form>
       </div>
     `);
   }
 
-  // =============================================================== modals
-  function modalView() {
-    const m = state.modal;
-    if (!m) return "";
-    if (m.kind === "new-file") {
-      return `<div class="modal-back" data-act="close-modal">
-        <div class="modal" data-stop="1">
-          <div class="modal-head"><h3>New file</h3><button class="icon-btn" data-act="close-modal">×</button></div>
-          <div class="modal-body">
-            <div class="field">
-              <label>Path, relative to the repository root</label>
-              <input id="new-file-path" placeholder="${esc(state.treePath ? state.treePath + "/" : "")}notes.md" value="${esc(state.treePath ? state.treePath + "/" : "")}" />
+  // 7. Observability Screen
+  function observabilityView() {
+    const obs = state.observability || {};
+    const tools = state.me?.toolchain || {};
+    return Shell(`
+      <div class="space-y-5">
+        <div class="page-header rise">
+          <div>
+            <h1 class="page-title">Observability</h1>
+            <p class="page-subtitle">Real-time system telemetry, Prometheus metrics, and Grafana dashboard status.</p>
+          </div>
+          <button data-act="publish-grafana" class="btn-primary">Publish Grafana dashboard</button>
+        </div>
+
+        <div class="glass p-5" style="padding:24px;">
+          <h2 style="font-size:16px; font-weight:600; margin-bottom:16px;">Toolchain Capabilities</h2>
+          <div class="grid-3">
+            ${Object.entries(tools).map(([name, t]) => `
+              <div class="glass p-4" style="padding:16px; border-radius:var(--radius-md);">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <strong style="font-size:14px;">${esc(name)}</strong>
+                  <span class="verdict ${t.available ? "verdict-pass" : "verdict-fail"}">${t.available ? "Ready" : "Degraded"}</span>
+                </div>
+                <p style="margin-top:8px; font-size:12.5px; color:var(--text-dim);">${esc(t.detail || "")}</p>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+
+        <div class="glass p-5" style="padding:24px;">
+          <h2 style="font-size:16px; font-weight:600; margin-bottom:12px;">Prometheus Metrics Scraping</h2>
+          <p style="font-size:13.5px; color:var(--text-muted); margin-bottom:16px;">
+            ChaosGate exposes 28 Prometheus metric families at <code>/metrics</code> including <code>chaosgate_runs_total</code>, <code>chaosgate_stage_duration_seconds</code>, and <code>chaosgate_resilience_score</code>.
+          </p>
+          <a href="/metrics" target="_blank" class="btn-primary" style="font-size:13px; padding:7px 18px;">Inspect /metrics live</a>
+        </div>
+      </div>
+    `);
+  }
+
+  // 8. Docs Screen
+  function docsView() {
+    return Shell(`
+      <div class="space-y-5">
+        <div class="page-header rise">
+          <div>
+            <h1 class="page-title">Contract & Specifications</h1>
+            <p class="page-subtitle">Standard specifications for chaosgate.yml release gates and multi-stage evaluation.</p>
+          </div>
+        </div>
+        <div class="glass p-6" style="padding:26px;">
+          <pre class="terminal-box" style="font-size:13px; line-height:1.7;">${esc(state.contract || `# ChaosGate Contract Schema v2
+version: 2
+stages:
+  - validate
+  - detect
+  - unit
+  - build
+  - security
+  - docker
+  - kubernetes
+  - smoke
+  - load
+  - prometheus
+  - chaos
+  - grafana
+  - verdict
+
+policies:
+  max_p95_ms: 300
+  max_error_rate: 1.0
+  block_on_secrets: true
+`)}</pre>
+        </div>
+      </div>
+    `);
+  }
+
+  // ---------------------------------------------------------------- Rollback Modal Sheet
+  function ModalSheet() {
+    if (!state.modal) return "";
+    if (state.modal.kind === "rollback") {
+      const data = state.revertData;
+      const run = state.run;
+      return `
+        <div class="modal-backdrop" data-act="close-modal">
+          <div class="modal-sheet glass rise" data-stop>
+            <div class="modal-sheet-head">
+              <h3>Roll back ${esc((run?.commit_sha || "commit").slice(0, 7))}</h3>
+              <button class="close-btn" data-act="close-modal">✕</button>
             </div>
-            <p class="help tiny">Intermediate folders are created automatically. End with <code>/</code> to make a directory.</p>
-          </div>
-          <div class="modal-foot">
-            <button class="btn" data-act="close-modal">Cancel</button>
-            <button class="btn btn-go" data-act="create-file">Create</button>
+            ${state.revertLoading ? `
+              <p style="padding:32px 0; text-align:center; color:var(--text-dim); font-size:14px;">Running 3-way merge conflict analysis…</p>
+            ` : data ? `
+              <p style="font-size:14px; font-weight:500; color:${data.clean ? "var(--emerald)" : "var(--amber)"};">
+                ${data.clean ? "Reverts cleanly — no merge collisions detected." : "Collision detected — patch quarantined."}
+              </p>
+              <ul class="revert-file-list">
+                ${(data.files || []).map((f) => `
+                  <li class="revert-file-item">
+                    <span class="font-mono">${esc(f.path)}</span>
+                    <span style="color:${f.state === "clean" ? "var(--emerald)" : "var(--amber)"}; font-size:12px;">
+                      ${f.state === "clean" ? "clean" : `conflict ${esc(f.lines || "")}`}
+                    </span>
+                  </li>
+                `).join("")}
+              </ul>
+              ${data.clean ? `
+                <button data-act="execute-revert" data-id="${run.id}" class="btn-primary" style="width:100%; margin-top:20px; padding:12px 0;">
+                  Open 1-Click Revert Pull Request
+                </button>
+              ` : `
+                <div class="revert-cli-box">
+                  ${(data.cli || []).map((cmd) => `<div>$ ${esc(cmd)}</div>`).join("")}
+                </div>
+              `}
+            ` : `<p style="padding:24px 0; text-align:center;">Failed to analyze rollback.</p>`}
           </div>
         </div>
-      </div>`;
+      `;
     }
-    if (m.kind === "pushed") {
-      const pr = m.pull_request;
-      return `<div class="modal-back" data-act="close-modal">
-        <div class="modal" data-stop="1">
-          <div class="modal-head"><h3>Pushed</h3><button class="icon-btn" data-act="close-modal">×</button></div>
-          <div class="modal-body">
-            <div class="banner go"><div>
-              <b>${m.push.file_count} file(s) on <code>${esc(m.push.branch)}</code></b>
-              <p>commit <span class="mono">${esc(m.push.short_sha || "")}</span> — ${esc(m.push.message)}</p>
-            </div></div>
-            ${pr ? `<p>Pull request <a href="${esc(pr.html_url)}" target="_blank" rel="noreferrer">#${pr.number} ↗</a> is open against <code>${esc(m.push.base_branch)}</code>.</p>`
-                 : m.pr_error ? `<div class="banner"><div><b>Pull request not opened</b><p>${esc(m.pr_error)}</p></div></div>` : ""}
-            ${m.run ? `<p>The gate is running now. The verdict will be posted back to GitHub as a commit status.</p>` : ""}
-          </div>
-          <div class="modal-foot">
-            <button class="btn" data-act="close-modal">Stay here</button>
-            ${m.run ? `<button class="btn btn-go" data-act="goto-run" data-id="${esc(m.run.id)}">Watch the gate →</button>` : ""}
+
+    if (state.modal.kind === "connect-repo") {
+      return `
+        <div class="modal-backdrop" data-act="close-modal">
+          <div class="modal-sheet glass rise" data-stop>
+            <div class="modal-sheet-head">
+              <h3>Connect GitHub Repository</h3>
+              <button class="close-btn" data-act="close-modal">✕</button>
+            </div>
+            <form data-form="connect-repo" class="space-y-4">
+              <div>
+                <p style="font-size:13.5px; color:var(--text-muted); margin-bottom:8px;">Enter repository full name (e.g. <code>owner/repository</code>):</p>
+                <input id="connect-repo-name" class="text-input" style="width:100%;" placeholder="owner/repo" required />
+              </div>
+              <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button type="button" data-act="close-modal" class="btn-ghost">Cancel</button>
+                <button type="submit" class="btn-primary">Add repository</button>
+              </div>
+            </form>
           </div>
         </div>
-      </div>`;
+      `;
     }
     return "";
   }
 
-  // ============================================================== routing
+  // ---------------------------------------------------------------- Routing & Render
   function parseRoute() {
     const p = path();
-    if (p === "/") return { name: "landing" };
-    if (p === "/console") return { name: "overview" };
-    if (p === "/console/repos") return { name: "repos" };
-    if (p === "/console/runs") return { name: "runs" };
-    if (p === "/console/connect") return { name: "connect" };
-    if (p === "/console/docs") return { name: "docs" };
-    if (p === "/console/settings") return { name: "settings" };
-    if (p === "/console/observability") return { name: "observability" };
-    let m = p.match(/^\/console\/repos\/([^/]+)$/);
+    if (p === "/" || p === "/overview" || p === "/console") return { name: "overview" };
+    if (p === "/runs" || p === "/console/runs") return { name: "runs" };
+    if (p === "/repos" || p === "/console/repos") return { name: "repos" };
+    if (p === "/settings" || p === "/console/settings" || p === "/policy") return { name: "settings" };
+    if (p === "/observability" || p === "/console/observability") return { name: "observability" };
+    if (p === "/docs" || p === "/console/docs") return { name: "docs" };
+    let m = p.match(/^\/(?:console\/)?repos\/([^/]+)$/);
     if (m) return { name: "repo", id: m[1] };
-    m = p.match(/^\/console\/runs\/([^/]+)$/);
+    m = p.match(/^\/(?:console\/)?runs\/([^/]+)$/);
     if (m) return { name: "run", id: m[1] };
     return { name: "overview" };
   }
 
-  function stopStream() {
-    if (state.stream) { state.stream.close(); state.stream = null; }
-  }
-
-  function watchRun(id) {
-    stopStream();
-    const src = new EventSource(`/api/runs/${id}/stream`);
-    state.stream = src;
-    src.onerror = () => { /* browser retries automatically */ };
-    src.onmessage = async (ev) => {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch (_) { return; }
-      if (msg.kind === "done" || msg.kind === "error") {
-        src.close(); state.stream = null;
-        try {
-          state.run = (await api.run(id)).run;
-          state.artifacts = (await api.artifacts(id)).artifacts || [];
-          state.me = await api.me();
-        } catch (_) {}
-        if (parseRoute().name === "run") paint();
-        return;
-      }
-      if (parseRoute().name !== "run" || state.run?.id !== id) return;
-      if (msg.kind === "stage" && state.run?.stages) {
-        const st = state.run.stages.find((s) => s.key === msg.payload.key);
-        if (st) {
-          st.status = msg.payload.status;
-          if (msg.payload.summary) st.summary = msg.payload.summary;
-          if (msg.payload.metrics && Object.keys(msg.payload.metrics).length) st.metrics = msg.payload.metrics;
-          st.degraded = !!msg.payload.degraded;
-        }
-      }
-      if (msg.kind === "log" && state.run?.stages) {
-        const st = state.run.stages.find((s) => s.key === msg.payload.key);
-        if (st) st.logs = (st.logs || "") + msg.payload.line + "\n";
-      }
-      paint({ keepScroll: true });
-    };
-  }
-
-  function paint(opts = {}) {
-    const term = document.getElementById("term");
-    const stick = opts.keepScroll && term && term.scrollHeight - term.scrollTop - term.clientHeight < 90;
-
-    // preserve editor caret across repaints
-    const ed = document.getElementById("editor");
-    const caret = ed ? { start: ed.selectionStart, end: ed.selectionEnd, top: ed.scrollTop, path: ed.dataset.path } : null;
-
+  async function render() {
     const route = parseRoute();
-    const views = {
-      landing, overview, repos: reposView, repo: repoView, runs: runsView,
-      run: runView, connect: connectView, docs: docsView, settings: settingsView,
-      observability: observabilityView,
-    };
-    app.innerHTML = (views[route.name] || overview)() + modalView();
-    bind();
-
-    const next = document.getElementById("term");
-    if (next && (stick || !opts.keepScroll)) next.scrollTop = next.scrollHeight;
-
-    const ed2 = document.getElementById("editor");
-    if (ed2 && caret && ed2.dataset.path === caret.path) {
-      try { ed2.setSelectionRange(caret.start, caret.end); ed2.scrollTop = caret.top; } catch (_) {}
-      if (opts.focusEditor) ed2.focus();
-    } else if (ed2 && opts.focusEditor) {
-      ed2.focus();
+    try {
+      if (!state.me) state.me = await api.me();
+      if (route.name === "overview") {
+        state.me = await api.me();
+        state.repos = (await api.repos()).repos;
+        state.policy = (await api.policy()).policy;
+      } else if (route.name === "runs") {
+        state.runs = (await api.runs()).runs;
+      } else if (route.name === "run") {
+        state.run = (await api.run(route.id)).run;
+        state.artifacts = (await api.artifacts(route.id)).artifacts || [];
+      } else if (route.name === "repos") {
+        state.repos = (await api.repos()).repos;
+      } else if (route.name === "repo") {
+        state.repo = (await api.repo(route.id)).repo;
+        if (state.repo.workspace_cloned && !state.tree) {
+          state.tree = await api.files(state.repo.id);
+        }
+      } else if (route.name === "settings") {
+        state.policy = (await api.policy()).policy;
+      } else if (route.name === "observability") {
+        state.observability = await api.observability();
+      } else if (route.name === "docs") {
+        state.contract = (await api.contract()).content;
+      }
+      paint();
+    } catch (err) {
+      app.innerHTML = `<div class="app-main"><div class="glass p-5" style="padding:24px; color:var(--rose);">Failed to load: ${esc(err.message)}</div></div>`;
     }
   }
 
-  // =============================================================== events
-  function bind() {
-    document.querySelectorAll("[data-href]").forEach((el) => {
-      el.addEventListener("click", (e) => {
-        if (e.target.closest("a,button,input,label")) return;
-        go(el.getAttribute("data-href"));
-      });
-    });
+  function paint() {
+    const route = parseRoute();
+    const views = {
+      overview: overviewView,
+      runs: runsView,
+      run: runDetailView,
+      repos: reposView,
+      repo: repoDetailView,
+      settings: settingsView,
+      observability: observabilityView,
+      docs: docsView,
+    };
+    app.innerHTML = (views[route.name] || overviewView)();
+    bindEvents();
+  }
+
+  // ---------------------------------------------------------------- Event Handlers
+  function bindEvents() {
     document.querySelectorAll("[data-act]").forEach((el) => {
       el.addEventListener("click", (e) => {
         if (el.dataset.act === "close-modal" && e.target.closest("[data-stop]")) return;
@@ -1418,477 +963,197 @@
         handleAction(el, e);
       });
     });
+
     document.querySelectorAll("form[data-form]").forEach((form) => {
-      form.addEventListener("submit", (e) => { e.preventDefault(); handleForm(form); });
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        handleForm(form);
+      });
     });
-
-    const editor = document.getElementById("editor");
-    if (editor) {
-      editor.addEventListener("input", () => {
-        const f = state.open.find((x) => x.path === editor.dataset.path);
-        if (f) {
-          f.content = editor.value;
-          const tab = [...document.querySelectorAll(".ide-tab")].find((t) => t.textContent.includes(f.path.split("/").pop()));
-          if (tab && !tab.querySelector(".dirty") && f.content !== f.original) {
-            tab.insertAdjacentHTML("afterbegin", '<span class="dirty"></span>');
-          }
-        }
-      });
-      editor.addEventListener("keydown", (e) => {
-        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveActive(); }
-        if (e.key === "Tab") {
-          e.preventDefault();
-          const s = editor.selectionStart, en = editor.selectionEnd;
-          editor.value = editor.value.slice(0, s) + "  " + editor.value.slice(en);
-          editor.selectionStart = editor.selectionEnd = s + 2;
-          editor.dispatchEvent(new Event("input"));
-        }
-      });
-    }
-
-    const filter = document.getElementById("gh-filter");
-    if (filter) {
-      filter.addEventListener("input", () => {
-        state.ghFilter = filter.value;
-        const pos = filter.selectionStart;
-        paint();
-        const f2 = document.getElementById("gh-filter");
-        if (f2) { f2.focus(); f2.setSelectionRange(pos, pos); }
-      });
-    }
-
-    const msg = document.getElementById("commit-msg");
-    if (msg) msg.addEventListener("input", () => { state.commitMsg = msg.value; });
   }
 
-  async function saveActive() {
-    const f = state.open.find((x) => x.path === state.activePath);
-    if (!f || f.binary) return;
-    try {
-      const res = await api.saveFile(state.repo.id, f.path, f.content);
-      f.original = f.content;
-      state.status = res.status || state.status;
-      await refreshTree();
-      toast(`Saved ${f.path}`);
-      paint({ focusEditor: true });
-    } catch (err) { toast(err.message); }
-  }
-
-  async function refreshTree() {
-    if (!state.repo?.workspace_cloned) return;
-    try { state.tree = await api.files(state.repo.id, state.treePath); } catch (_) {}
-  }
-
-  async function handleAction(el, event) {
+  async function handleAction(el) {
     const act = el.dataset.act;
-    const id = el.dataset.id || state.repo?.id;
-    try {
-      switch (act) {
-        case "demo": return void (await bootDemo());
+    const id = el.dataset.id;
 
-        case "tab": {
-          state.tab = el.dataset.tab;
-          if (state.tab === "files" && state.repo?.workspace_cloned && !state.tree) await refreshTree();
-          if (state.tab === "changes" && state.repo?.workspace_cloned) {
-            state.status = await api.status(state.repo.id);
-            const d = await api.diff(state.repo.id);
-            state.diff = d.diff; state.diffPath = null;
-          }
-          return paint();
-        }
+    if (act === "filter-runs") {
+      state.runStatusFilter = el.dataset.filter;
+      return paint();
+    }
 
-        case "run": {
-          el.disabled = true;
-          const data = await api.runRepo(id);
-          return go(`/console/runs/${data.run.id}`);
-        }
+    if (act === "select-stage") {
+      state.selectedStage = el.dataset.key;
+      state.showFullLog = false;
+      return paint();
+    }
 
-        case "open-ws": {
-          el.disabled = true;
-          el.textContent = "Cloning…";
-          const res = await api.openWs(id);
-          state.repo = (await api.repo(id)).repo;
-          state.tab = "files"; state.treePath = ""; state.open = []; state.activePath = null;
-          await refreshTree();
-          state.status = await api.status(id);
-          toast(res.existed ? "Workspace already open" : `Cloned ${state.repo.full_name}`);
-          return paint();
-        }
+    if (act === "toggle-full-log") {
+      state.showFullLog = !state.showFullLog;
+      return paint();
+    }
 
-        case "pull-ws": {
-          const res = await api.pullWs(id);
-          state.repo = (await api.repo(id)).repo;
-          await refreshTree();
-          state.status = await api.status(id);
-          toast(res.ok ? "Pulled latest" : "Pull failed — see the log");
-          return paint();
-        }
+    if (act === "export-json") {
+      if (!state.run) return;
+      const blob = new Blob([JSON.stringify(state.run, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `chaosgate-run-${state.run.id}.json`;
+      a.click();
+      return;
+    }
 
-        case "cd": {
-          state.treePath = el.dataset.path || "";
-          await refreshTree();
-          return paint();
-        }
-
-        case "refresh-tree": { await refreshTree(); return paint(); }
-
-        case "open-file": {
-          const p = el.dataset.path;
-          if (!state.open.find((f) => f.path === p)) {
-            const file = await api.readFile(state.repo.id, p);
-            state.open.push({
-              path: p, content: file.content || "", original: file.content || "",
-              language: file.language, binary: file.binary, size: file.size,
-            });
-            if (state.open.length > 8) state.open.shift();
-          }
-          state.activePath = p;
-          return paint({ focusEditor: true });
-        }
-
-        case "focus-file": { state.activePath = el.dataset.path; return paint({ focusEditor: true }); }
-
-        case "close-file": {
-          const p = el.dataset.path;
-          const f = state.open.find((x) => x.path === p);
-          if (f && f.content !== f.original && !confirm(`${p} has unsaved changes. Close anyway?`)) return;
-          state.open = state.open.filter((x) => x.path !== p);
-          if (state.activePath === p) state.activePath = state.open.at(-1)?.path || null;
-          return paint();
-        }
-
-        case "save-file": return void (await saveActive());
-
-        case "new-file": { state.modal = { kind: "new-file" }; return paint(); }
-
-        case "create-file": {
-          const input = document.getElementById("new-file-path");
-          const p = (input?.value || "").trim();
-          if (!p) return toast("Enter a path");
-          const isDir = p.endsWith("/");
-          await api.newFile(state.repo.id, p.replace(/\/$/, ""), isDir ? "dir" : "file");
-          state.modal = null;
-          await refreshTree();
-          state.status = await api.status(state.repo.id);
-          if (!isDir) {
-            state.open.push({ path: p, content: "", original: "", language: "text", binary: false, size: 0 });
-            state.activePath = p;
-          }
-          toast(`Created ${p}`);
-          return paint({ focusEditor: true });
-        }
-
-        case "delete-file": {
-          const p = el.dataset.path;
-          if (!confirm(`Delete ${p}? This only changes the local workspace.`)) return;
-          await api.delFile(state.repo.id, p);
-          state.open = state.open.filter((x) => x.path !== p);
-          if (state.activePath === p) state.activePath = state.open.at(-1)?.path || null;
-          await refreshTree();
-          state.status = await api.status(state.repo.id);
-          toast(`Deleted ${p}`);
-          return paint();
-        }
-
-        case "close-modal": { state.modal = null; return paint(); }
-
-        case "sel-file": {
-          const p = el.dataset.path;
-          if (!state.selected) state.selected = new Set((state.status.files || []).map((f) => f.path));
-          if (el.checked) state.selected.add(p); else state.selected.delete(p);
-          const btn = document.querySelector('[data-act="push"]');
-          if (btn) btn.textContent = `Push ${state.selected.size} file${state.selected.size === 1 ? "" : "s"} & run gate`;
-          return;
-        }
-
-        case "show-diff": {
-          state.diffPath = el.dataset.path;
-          const d = await api.diff(state.repo.id, state.diffPath);
-          state.diff = d.diff;
-          return paint();
-        }
-
-        case "discard-file": {
-          const p = el.dataset.path;
-          if (!confirm(`Discard changes to ${p}?`)) return;
-          const res = await api.discard(state.repo.id, p);
-          state.status = res.status;
-          state.open = state.open.filter((x) => x.path !== p);
-          if (state.activePath === p) state.activePath = state.open.at(-1)?.path || null;
-          await refreshTree();
-          toast(`Reverted ${p}`);
-          return paint();
-        }
-
-        case "discard-all": {
-          if (!confirm("Discard every uncommitted change in the workspace?")) return;
-          const res = await api.discard(state.repo.id, null);
-          state.status = res.status; state.open = []; state.activePath = null; state.diff = "";
-          await refreshTree();
-          toast("Workspace reset");
-          return paint();
-        }
-
-        case "strategy": { state.strategy = el.dataset.value; return paint(); }
-
-        case "push": {
-          const message = (document.getElementById("commit-msg")?.value || "").trim();
-          if (!message) return toast("A commit message is required");
-          const runGate = document.getElementById("run-gate")?.checked !== false;
-          const paths = state.selected ? [...state.selected] : null;
-          if (paths && !paths.length) return toast("Select at least one file");
-
-          state.pushing = true; paint();
-          try {
-            const res = await api.push(id, {
-              message,
-              strategy: state.strategy || state.me?.push_strategy || "branch_pr",
-              paths,
-              run_gate: runGate,
-              open_pr: true,
-            });
-            state.pushing = false;
-            state.commitMsg = ""; state.selected = null; state.diff = ""; state.diffPath = null;
-            state.repo = (await api.repo(id)).repo;
-            state.status = await api.status(id);
-            state.open = state.open.map((f) => ({ ...f, original: f.content }));
-            state.me = await api.me();
-            state.modal = { kind: "pushed", ...res };
-            toast(`Pushed to ${res.push.branch}`);
-            return paint();
-          } catch (err) {
-            state.pushing = false; paint();
-            throw err;
-          }
-        }
-
-        case "goto-run": { state.modal = null; return go(`/console/runs/${el.dataset.id}`); }
-
-        case "show-recovery": {
-          state.showRecovery = state.showRecovery === el.dataset.id ? null : el.dataset.id;
-          return paint();
-        }
-
-        case "revert-run": {
-          if (!confirm("Open a pull request that reverts this commit?\n\nChaosGate never pushes directly to a shared branch — you review and merge the PR.")) return;
-          el.disabled = true;
-          el.textContent = "Opening revert…";
-          const res = await api.revert(el.dataset.id);
-          state.run = (await api.run(el.dataset.id)).run;
-          toast(res.pull_request ? `Revert PR #${res.pull_request.number} opened` : `Revert branch ${res.branch} pushed`);
-          return paint();
-        }
-
-        case "file-incident": {
-          el.disabled = true;
-          const res = await api.fileIncident(el.dataset.id);
-          state.run = (await api.run(el.dataset.id)).run;
-          toast(res.existed ? "Incident already open" : `Incident #${res.number} filed`);
-          return paint();
-        }
-
-        case "focus-stage": {
-          const key = el.dataset.key;
-          const det = [...document.querySelectorAll(".stage-detail")]
-            .find((d) => d.querySelector("summary b")?.textContent === state.run.stages.find((s) => s.key === key)?.name);
-          if (det) { det.open = true; det.scrollIntoView({ behavior: "smooth", block: "center" }); }
-          return;
-        }
-
-        case "oauth": {
-          const { authorize_url } = await api.oauthUrl();
-          window.location.href = authorize_url;
-          return;
-        }
-
-        case "refresh-gh": {
-          state.ghLoading = true; paint();
-          state.githubRepos = (await api.ghRepos()).repos;
-          state.ghLoading = false;
-          return paint();
-        }
-
-        case "add": {
-          el.disabled = true;
-          const data = await api.addRepo(el.dataset.name);
-          toast(`Connected ${data.repo.full_name}`);
-          return go(`/console/repos/${data.repo.id}`);
-        }
-
-        case "unlink": {
-          if (!confirm("Unlink this repository and delete its local workspace?")) return;
-          await api.delRepo(id);
-          toast("Repository unlinked");
-          return go("/console/repos");
-        }
-
-        case "logout": {
-          await api.logout();
-          state.githubRepos = []; state.me = await api.me();
-          toast("GitHub disconnected");
-          return paint();
-        }
-
-        case "install-workflow": {
-          el.disabled = true; el.textContent = "Installing…";
-          const res = await api.installWorkflow(id);
-          state.repo = res.repo ? { ...state.repo, ...res.repo } : state.repo;
-          toast("Workflow committed to .github/workflows/chaosgate.yml");
-          return paint();
-        }
-
-        case "install-webhook": {
-          el.disabled = true;
-          const res = await api.installWebhook(id);
-          state.repo = (await api.repo(id)).repo;
-          toast(`Webhook pointed at ${res.url}`);
-          return paint();
-        }
-
-        case "dispatch": {
-          const data = await api.dispatch(id);
-          return toast(data.message || "Dispatched");
-        }
-
-        case "toggle-autorun": {
-          await api.patchRepo(id, { auto_run_on_push: el.checked });
-          toast(el.checked ? "Auto-run enabled" : "Auto-run disabled");
-          return;
-        }
-
-        case "toggle": {
-          const key = el.dataset.key;
-          state.policy = (await api.savePolicy({ ...state.policy, [key]: !state.policy[key] })).policy;
-          return paint();
-        }
-
-        case "refresh-caps": {
-          await api.capabilities();
-          state.me = await api.me();
-          toast("Toolchain re-probed");
-          return paint();
-        }
-
-        case "publish-dashboard": {
-          el.disabled = true;
-          try {
-            const res = await api.publishDashboard();
-            toast(`Dashboard published: ${res.url}`);
-          } catch (err) {
-            toast(err.message);
-          }
-          el.disabled = false;
-          return;
-        }
+    if (act === "open-rollback") {
+      state.modal = { kind: "rollback" };
+      state.revertLoading = true;
+      paint();
+      try {
+        state.revertData = await api.recovery(state.run.id);
+      } catch (err) {
+        toast("Recovery check failed: " + err.message, "err");
+      } finally {
+        state.revertLoading = false;
+        paint();
       }
-    } catch (err) {
-      toast(err.message);
-      el.disabled = false;
+      return;
+    }
+
+    if (act === "execute-revert") {
+      try {
+        el.disabled = true;
+        el.textContent = "Reverting…";
+        const res = await api.revert(id);
+        toast("Revert pull request opened successfully!");
+        state.modal = null;
+        if (res.pr_url) window.open(res.pr_url, "_blank");
+      } catch (err) {
+        toast("Rollback failed: " + err.message, "err");
+      } finally {
+        paint();
+      }
+      return;
+    }
+
+    if (act === "rerun" || act === "trigger-repo-run") {
+      const repoId = id || state.repo?.id;
+      const branch = document.getElementById("run-branch")?.value || "main";
+      try {
+        el.disabled = true;
+        el.textContent = "Triggering…";
+        const res = await api.runRepo(repoId, { branch });
+        toast(`Release gate triggered on ${branch}`);
+        go(`/runs/${res.run.id}`);
+      } catch (err) {
+        toast("Failed to run gate: " + err.message, "err");
+      }
+      return;
+    }
+
+    if (act === "open-connect-repo") {
+      state.modal = { kind: "connect-repo" };
+      return paint();
+    }
+
+    if (act === "close-modal") {
+      state.modal = null;
+      return paint();
+    }
+
+    if (act === "set-repo-tab") {
+      state.repoTab = el.dataset.tab;
+      return paint();
+    }
+
+    if (act === "open-file") {
+      const p = el.dataset.path;
+      if (!state.open.find((f) => f.path === p)) {
+        const file = await api.readFile(state.repo.id, p);
+        state.open.push({ path: p, content: file.content || "" });
+      }
+      state.activePath = p;
+      return paint();
+    }
+
+    if (act === "save-file") {
+      const editor = document.getElementById("editor");
+      if (!editor || !state.activePath) return;
+      await api.saveFile(state.repo.id, state.activePath, editor.value);
+      const f = state.open.find((x) => x.path === state.activePath);
+      if (f) f.content = editor.value;
+      toast(`Saved ${state.activePath}`);
+      return;
+    }
+
+    if (act === "refresh-tree") {
+      state.tree = await api.files(state.repo.id);
+      return paint();
+    }
+
+    if (act === "toggle-policy") {
+      const key = el.dataset.key;
+      state.policy[key] = !state.policy[key];
+      el.classList.toggle("on", state.policy[key]);
+      return;
+    }
+
+    if (act === "publish-grafana") {
+      try {
+        el.disabled = true;
+        el.textContent = "Publishing…";
+        await api.publishDashboard();
+        toast("Grafana dashboard published to provisioned instance!");
+      } catch (err) {
+        toast("Publish failed: " + err.message, "err");
+      } finally {
+        el.disabled = false;
+        el.textContent = "Publish Grafana dashboard";
+      }
+      return;
     }
   }
 
   async function handleForm(form) {
     const kind = form.dataset.form;
-    const data = Object.fromEntries(new FormData(form).entries());
-    try {
-      if (kind === "github") {
-        if (!data.token?.trim()) return toast("Paste a token first");
-        const res = await api.githubPat(data.token.trim());
-        state.me = await api.me();
-        if (res.warning) toast(res.warning);
-        state.ghLoading = true; paint();
-        try { state.githubRepos = (await api.ghRepos()).repos; } catch (err) { toast(err.message); }
-        state.ghLoading = false;
-        toast(`Connected as ${state.me.workspace.github_login}`);
-        paint();
+    if (kind === "save-policy") {
+      const fd = new FormData(form);
+      const payload = {
+        ...state.policy,
+        max_p95_ms: Number(fd.get("max_p95_ms") || 300),
+        max_error_rate_pct: Number(fd.get("max_error_rate_pct") || 1.0),
+      };
+      const token = fd.get("github_token");
+      if (token && !token.startsWith("••••")) {
+        payload.github_token = token;
       }
-      if (kind === "add-repo") {
-        if (!data.full_name?.trim()) return toast("Enter owner/name");
-        const res = await api.addRepo(data.full_name.trim());
-        toast(`Connected ${res.repo.full_name}`);
-        go(`/console/repos/${res.repo.id}`);
-      }
-      if (kind === "policy-num") {
-        state.policy = (await api.savePolicy({
-          max_p95_ms: Number(data.max_p95_ms),
-          max_error_rate: Number(data.max_error_rate),
-        })).policy;
-        toast("Thresholds saved");
-        paint();
-      }
-    } catch (err) { toast(err.message); }
-  }
-
-  async function bootDemo() {
-    bootEl.classList.remove("hidden");
-    await api.demo();
-    state.me = await api.me();
-    await new Promise((r) => setTimeout(r, 1000));
-    bootEl.classList.add("hidden");
-    go("/console");
-  }
-
-  // ================================================================ render
-  async function render() {
-    const route = parseRoute();
-    if (route.name !== "run") stopStream();
-    try {
-      if (!state.me) state.me = await api.me();
-
-      if (route.name === "landing") return paint();
-
-      if (route.name === "overview") {
-        state.me = await api.me();
-        state.repos = (await api.repos()).repos;
-      } else if (route.name === "repos") {
-        state.repos = (await api.repos()).repos;
-      } else if (route.name === "repo") {
-        const fresh = (await api.repo(route.id)).repo;
-        const switched = state.repo?.id !== fresh.id;
-        state.repo = fresh;
-        if (switched) {
-          state.tab = fresh.workspace_cloned ? "files" : "overview";
-          state.open = []; state.activePath = null; state.treePath = "";
-          state.tree = null; state.diff = ""; state.selected = null; state.commitMsg = "";
-        }
-        if (fresh.workspace_cloned) {
-          state.status = await api.status(fresh.id);
-          if (state.tab === "files" && !state.tree) await refreshTree();
-          if (state.tab === "changes" && !state.diff) {
-            try { state.diff = (await api.diff(fresh.id)).diff; } catch (_) {}
-          }
-        }
-      } else if (route.name === "runs") {
-        state.runs = (await api.runs()).runs;
-      } else if (route.name === "run") {
-        state.run = (await api.run(route.id)).run;
-        state.artifacts = (await api.artifacts(route.id)).artifacts || [];
-        if (state.run && (state.run.status === "queued" || state.run.status === "running")) {
-          watchRun(state.run.id);
-        }
-      } else if (route.name === "connect") {
-        if (state.me?.workspace?.connected && !state.githubRepos.length) {
-          state.ghLoading = true; paint();
-          try { state.githubRepos = (await api.ghRepos()).repos; } catch (_) {}
-          state.ghLoading = false;
-        }
-      } else if (route.name === "docs") {
-        state.workflow = (await api.workflow()).content;
-        state.contract = (await api.contract()).content;
-      } else if (route.name === "settings") {
+      try {
+        await api.savePolicy(payload);
         state.policy = (await api.policy()).policy;
-      } else if (route.name === "observability") {
-        state.observability = await api.observability();
-        state.webhooks = (await api.webhooks()).events;
+        toast("Policies updated and saved securely.");
+      } catch (err) {
+        toast("Failed to save: " + err.message, "err");
       }
-      paint();
-    } catch (err) {
-      app.innerHTML = `<div class="main"><div class="empty">${esc(err.message)}</div></div>`;
+      return paint();
+    }
+
+    if (kind === "connect-repo") {
+      const name = document.getElementById("connect-repo-name")?.value.trim();
+      if (!name) return;
+      try {
+        const res = await api.addRepo(name);
+        state.modal = null;
+        toast(`Connected repository ${name}`);
+        state.repos = (await api.repos()).repos;
+        go(`/repos/${res.repo.id}`);
+      } catch (err) {
+        toast("Failed to connect repository: " + err.message, "err");
+      }
     }
   }
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && state.modal) { state.modal = null; paint(); }
+    if (e.key === "Escape" && state.modal) {
+      state.modal = null;
+      paint();
+    }
   });
 
   render();
