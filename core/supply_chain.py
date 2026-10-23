@@ -23,6 +23,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+try:
+    import tomllib
+except ImportError:
+    try:
+        import tomli as tomllib  # type: ignore
+    except ImportError:
+        tomllib = None  # type: ignore
+
 import httpx
 
 OSV_API = "https://api.osv.dev/v1/querybatch"
@@ -54,7 +62,13 @@ SECRET_HISTORY_PATTERNS = [
     ("GitHub PAT", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}")),
     ("Slack token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
     ("Stripe live key", re.compile(r"sk_live_[A-Za-z0-9]{16,}")),
+    ("Groq API key", re.compile(r"gsk_[A-Za-z0-9]{20,}")),
+    ("NVIDIA NIM API key", re.compile(r"nvapi-[A-Za-z0-9_\-]{20,}")),
+    ("OpenRouter API key", re.compile(r"sk-or-(?:v1-)?[A-Za-z0-9_\-]{20,}")),
+    ("Anthropic API key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
+    ("OpenAI / AI Secret key", re.compile(r"sk-[A-Za-z0-9_\-]{16,}")),
     ("Google API key", re.compile(r"AIza[0-9A-Za-z_\-]{35}")),
+    ("HuggingFace token", re.compile(r"hf_[A-Za-z0-9]{30,}")),
     ("Private key block", re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA |PGP )?PRIVATE KEY-----")),
     ("JWT", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
 ]
@@ -81,7 +95,7 @@ def _is_dummy(token: str) -> bool:
     if token in KNOWN_DUMMY_TOKENS:
         return True
     # Obvious filler: a long run of one repeated character, or all zeros.
-    body = re.sub(r"^(AKIA|ghp_|sk_live_|AIza|xox[baprs]-)", "", token)
+    body = re.sub(r"^(AKIA|gh[pousr]_|sk_live_|sk-or-v1-|sk-or-|sk-ant-|sk-proj-|sk-|gsk_|nvapi-|hf_|AIza|xox[baprs]-)", "", token)
     if len(set(body)) <= 2:
         return True
     return bool(re.fullmatch(r"(?i)(x+|0+|1+|a+)", body))
@@ -361,6 +375,182 @@ def parse_package_lock(root: Path, limit: int = 250) -> list[dict[str, str]]:
     return out[:limit]
 
 
+def parse_poetry_lock(root: Path, limit: int = 250) -> list[dict[str, str]]:
+    """Resolved Python dependencies from poetry.lock."""
+    path = root / "poetry.lock"
+    if not path.is_file() or tomllib is None:
+        return []
+    try:
+        doc = tomllib.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return []
+
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for pkg in doc.get("package", []):
+        if not isinstance(pkg, dict):
+            continue
+        name = (pkg.get("name") or "").strip().lower()
+        version = str(pkg.get("version") or "").strip()
+        if name and version and re.match(r"^\d", version):
+            key = (name, version)
+            if key not in seen:
+                seen.add(key)
+                out.append({"name": name, "version": version, "ecosystem": "PyPI"})
+    return out[:limit]
+
+
+def parse_pipfile_lock(root: Path, limit: int = 250) -> list[dict[str, str]]:
+    """Resolved Python dependencies from Pipfile.lock."""
+    path = root / "Pipfile.lock"
+    if not path.is_file():
+        return []
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for section in ("default", "develop"):
+        packages = doc.get(section) or {}
+        if not isinstance(packages, dict):
+            continue
+        for name, meta in packages.items():
+            if not isinstance(meta, dict):
+                continue
+            ver = str(meta.get("version") or "").strip()
+            if ver.startswith("=="):
+                ver = ver[2:].strip()
+            if ver and re.match(r"^\d", ver):
+                clean_name = name.lower().strip()
+                key = (clean_name, ver)
+                if key not in seen:
+                    seen.add(key)
+                    out.append({"name": clean_name, "version": ver, "ecosystem": "PyPI"})
+    return out[:limit]
+
+
+def parse_pyproject(root: Path, limit: int = 250) -> list[dict[str, str]]:
+    """Pinned Python dependencies from pyproject.toml."""
+    path = root / "pyproject.toml"
+    if not path.is_file() or tomllib is None:
+        return []
+    try:
+        doc = tomllib.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return []
+
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    # PEP 621: [project] dependencies = ["flask==2.2.5", ...]
+    deps = doc.get("project", {}).get("dependencies", [])
+    if isinstance(deps, list):
+        for raw in deps:
+            match = re.match(r"^([A-Za-z0-9._-]+)\s*==\s*([0-9][^\s;,]*)", str(raw).strip())
+            if match:
+                name = match.group(1).lower()
+                ver = match.group(2)
+                key = (name, ver)
+                if key not in seen:
+                    seen.add(key)
+                    out.append({"name": name, "version": ver, "ecosystem": "PyPI"})
+
+    # Poetry: [tool.poetry.dependencies]
+    poetry_deps = doc.get("tool", {}).get("poetry", {}).get("dependencies", {})
+    if isinstance(poetry_deps, dict):
+        for name, val in poetry_deps.items():
+            if name.lower() == "python":
+                continue
+            ver = None
+            if isinstance(val, str):
+                if val.startswith("=="):
+                    ver = val[2:].strip()
+                elif re.match(r"^\d", val):
+                    ver = val.strip()
+            elif isinstance(val, dict):
+                v_str = str(val.get("version") or "").strip()
+                if v_str.startswith("=="):
+                    ver = v_str[2:].strip()
+                elif re.match(r"^\d", v_str):
+                    ver = v_str.strip()
+            if ver and re.match(r"^\d", ver):
+                clean_name = name.lower().strip()
+                key = (clean_name, ver)
+                if key not in seen:
+                    seen.add(key)
+                    out.append({"name": clean_name, "version": ver, "ecosystem": "PyPI"})
+    return out[:limit]
+
+
+def parse_cargo_lock(root: Path, limit: int = 250) -> list[dict[str, str]]:
+    """Resolved Rust dependencies from Cargo.lock."""
+    path = root / "Cargo.lock"
+    if not path.is_file() or tomllib is None:
+        return []
+    try:
+        doc = tomllib.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return []
+
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for pkg in doc.get("package", []):
+        if not isinstance(pkg, dict):
+            continue
+        name = (pkg.get("name") or "").strip()
+        version = str(pkg.get("version") or "").strip()
+        if name and version and re.match(r"^\d", version):
+            key = (name, version)
+            if key not in seen:
+                seen.add(key)
+                out.append({"name": name, "version": version, "ecosystem": "crates.io"})
+    return out[:limit]
+
+
+def parse_go_mod(root: Path, limit: int = 250) -> list[dict[str, str]]:
+    """Resolved Go dependencies from go.mod."""
+    path = root / "go.mod"
+    if not path.is_file():
+        return []
+
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    in_require_block = False
+
+    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.split("//")[0].strip()
+        if not line:
+            continue
+        if line.startswith("require ("):
+            in_require_block = True
+            continue
+        if in_require_block:
+            if line.startswith(")"):
+                in_require_block = False
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                name, version = parts[0], parts[1].lstrip("v")
+                if name and version and re.match(r"^\d", version):
+                    key = (name, version)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append({"name": name, "version": parts[1], "ecosystem": "Go"})
+        elif line.startswith("require "):
+            parts = line[8:].strip().split()
+            if len(parts) >= 2:
+                name, version = parts[0], parts[1].lstrip("v")
+                if name and version and re.match(r"^\d", version):
+                    key = (name, version)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append({"name": name, "version": parts[1], "ecosystem": "Go"})
+
+    return out[:limit]
+
+
 def query_osv(packages: list[dict[str, str]], timeout: float = 25.0) -> dict[str, Any]:
     """Batch-query OSV.dev for known vulnerabilities.
 
@@ -470,6 +660,10 @@ def _fix_hint(pkg: dict[str, str], vulns: list[dict[str, Any]]) -> str:
         newest = sorted(set(fixed))[-1]
         if pkg["ecosystem"] == "PyPI":
             return f"Upgrade to {pkg['name']}=={newest} or later."
+        if pkg["ecosystem"] == "crates.io":
+            return f"Upgrade to {pkg['name']} = \"{newest}\" or later."
+        if pkg["ecosystem"] == "Go":
+            return f"Upgrade to {pkg['name']} {newest} or later."
         return f"Upgrade to {pkg['name']}@{newest} or later."
     return f"No fixed version published yet — evaluate whether {pkg['name']} is still needed."
 
@@ -477,7 +671,23 @@ def _fix_hint(pkg: dict[str, str], vulns: list[dict[str, Any]]) -> str:
 def scan_dependencies_cve(root: Path) -> dict[str, Any]:
     """Full dependency vulnerability scan for a repository."""
     root = Path(root)
-    packages = parse_requirements(root) + parse_package_lock(root)
+    raw_packages = (
+        parse_requirements(root)
+        + parse_poetry_lock(root)
+        + parse_pipfile_lock(root)
+        + parse_pyproject(root)
+        + parse_cargo_lock(root)
+        + parse_go_mod(root)
+        + parse_package_lock(root)
+    )
+    seen: set[tuple[str, str, str]] = set()
+    packages: list[dict[str, str]] = []
+    for pkg in raw_packages:
+        key = (pkg.get("ecosystem", ""), pkg.get("name", ""), pkg.get("version", ""))
+        if key not in seen:
+            seen.add(key)
+            packages.append(pkg)
+
     if not packages:
         return {"available": True, "queried": 0, "findings": [], "vulnerable": 0,
                 "note": "no pinned dependencies to check"}

@@ -88,6 +88,23 @@ def detect_app(root: Path, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         app_type = "fullstack"
         hints.append("Python + Node detected — treating as full-stack")
 
+    has_cargo = "Cargo.toml" in files or "Cargo.lock" in files
+    has_go = "go.mod" in files or "main.go" in files
+
+    if has_cargo:
+        language = language or "rust"
+        app_type = "rust.app" if app_type == "unknown" else app_type
+        test_command = test_command or "cargo test"
+        build_command = build_command or "cargo build --release"
+        hints.append("Found Cargo.toml / Cargo.lock (Rust)")
+
+    if has_go:
+        language = language or "go"
+        app_type = "go.app" if app_type == "unknown" else app_type
+        test_command = test_command or "go test ./..."
+        build_command = build_command or "go build ./..."
+        hints.append("Found go.mod / Go source")
+
     if has_compose:
         hints.append("Docker Compose present — preferred start path")
     if has_docker:

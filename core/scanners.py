@@ -39,12 +39,22 @@ TEXT_SUFFIXES = {
 
 SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("AWS Access Key", re.compile(r"AKIA[0-9A-Z]{16}")),
-    ("GitHub PAT", re.compile(r"ghp_[A-Za-z0-9]{36}")),
+    ("GitHub PAT", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}")),
     ("Stripe live secret", re.compile(r"sk_live_[A-Za-z0-9]{16,}")),
+    ("Groq API key", re.compile(r"gsk_[A-Za-z0-9]{20,}")),
+    ("NVIDIA NIM API key", re.compile(r"nvapi-[A-Za-z0-9_\-]{20,}")),
+    ("OpenRouter API key", re.compile(r"sk-or-(?:v1-)?[A-Za-z0-9_\-]{20,}")),
+    ("Anthropic API key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
+    ("OpenAI / AI Secret key", re.compile(r"sk-[A-Za-z0-9_\-]{16,}")),
+    ("Google API key", re.compile(r"AIza[0-9A-Za-z_\-]{35}")),
+    ("HuggingFace token", re.compile(r"hf_[A-Za-z0-9]{30,}")),
     ("Private key block", re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----")),
     (
-        "Hardcoded API key",
-        re.compile(r"""api[_-]?key\s*[:=]\s*['"][A-Za-z0-9_\-]{16,}['"]""", re.I),
+        "Hardcoded API key / Secret",
+        re.compile(
+            r"""(?:[A-Za-z0-9_]*(?:api[_-]?key|secret[_-]?key|auth[_-]?token|access[_-]?token|_key|_secret|_token)|api[_-]?key|secret|token|auth)\s*[:=]\s*['"][A-Za-z0-9_\-]{12,}['"]""",
+            re.I,
+        ),
     ),
     (
         "Hardcoded password",
@@ -89,6 +99,7 @@ def scan_secrets(root: Path) -> list[dict[str, Any]]:
                         "line": lineno,
                     }
                 )
+                break
     return findings
 
 

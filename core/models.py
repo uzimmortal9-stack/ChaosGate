@@ -27,7 +27,20 @@ class Workspace(Base):
     github_login: Mapped[str | None] = mapped_column(String(120), nullable=True)
     github_avatar: Mapped[str | None] = mapped_column(String(400), nullable=True)
     github_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    github_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    _github_token: Mapped[str | None] = mapped_column("github_token", Text, nullable=True)
+
+    @property
+    def github_token(self) -> str | None:
+        from core import crypto
+
+        return crypto.decrypt_token(self._github_token)
+
+    @github_token.setter
+    def github_token(self, value: str | None) -> None:
+        from core import crypto
+
+        self._github_token = crypto.encrypt_token(value)
+
     github_scopes: Mapped[str | None] = mapped_column(String(400), nullable=True)
     auth_method: Mapped[str | None] = mapped_column(String(20), nullable=True)  # oauth | pat
     policy_json: Mapped[str | None] = mapped_column(Text, nullable=True)

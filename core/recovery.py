@@ -154,6 +154,9 @@ def incident_body(repo: Repository, run: PipelineRun, plan: dict[str, Any], repo
                 lines.append(f"  - Fix: `{finding['remediation']}`")
 
     lines += ["", "### Recovery", "", plan.get("summary", "")]
+    if plan.get("conflicts"):
+        lines += ["", "### Conflicting files", ""]
+        lines += [f"- `{f}`" for f in plan["conflicts"]]
     if plan.get("last_good"):
         good = plan["last_good"]
         lines.append(
@@ -265,11 +268,18 @@ def execute_revert(repo_id: str, full_name: str, token: str, bad_sha: str, base_
 
     ok, out = git("revert", "--no-edit", "--no-commit", bad_sha)
     if not ok:
+        conflicts = []
+        c_ok, c_out = git("diff", "--name-only", "--diff-filter=U")
+        if c_ok and c_out.strip():
+            conflicts = [f.strip() for f in c_out.splitlines() if f.strip()]
         git("revert", "--abort")
+        file_hint = f"in: {', '.join(conflicts)}" if conflicts else ""
         return {
             "ok": False,
             "reason": f"the revert does not apply cleanly: {out[-300:]}",
-            "hint": "Later commits touch the same lines. This needs a manual fix-forward.",
+            "conflicts": conflicts,
+            "conflict_count": len(conflicts),
+            "hint": f"Later commits touch the same lines {file_hint}. This needs a manual fix-forward.",
         }
 
     ok, out = git(

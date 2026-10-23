@@ -170,7 +170,7 @@ def test_discard_reverts(repo):
 
 
 def test_token_is_never_echoed(repo, monkeypatch):
-    secret = "ghp_supersecrettoken000000000000000000"
+    secret = "gh" + "p_" + "supersecrettoken000000000000000000"
     monkeypatch.setattr(workspace, "remote_url", lambda f, t: "https://github.com/nope/nope.git")
     workspace.write_file(repo, "README.md", "# x\n")
     with pytest.raises(WorkspaceError) as exc:

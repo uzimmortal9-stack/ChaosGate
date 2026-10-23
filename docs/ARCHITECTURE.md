@@ -87,6 +87,14 @@ Pushed commits cannot be un-pushed. The correct control is:
 
 `pipeline/workflows/chaosgate.yml` is the Actions file you copy into a target repo so GitHub can enforce that check. The control-plane **Run Gate** button runs the same stages locally for the demo and for repos the engine can clone.
 
-## MVP boundary
+## Security and Supported Capabilities
 
-This workspace is a single-tenant control panel. Tokens are stored in local SQLite and are not production-safe. Multi-tenant SaaS, OAuth apps, and self-hosted runners are the next phase — not a prerequisite for proving the gate.
+- **Token Encryption at Rest**: GitHub and VCS credentials are encrypted at rest in local SQLite using AES/CTR stream encryption authenticated via HMAC-SHA256 (keys derived via PBKDF2 from `SECRET_KEY`). Legacy plaintext tokens are transparently supported and safely upgradeable.
+- **Supply Chain Ecosystems**: Integrated vulnerability auditing covers Python (`requirements.txt`, `poetry.lock`, `Pipfile.lock`, `pyproject.toml`), Node.js (`package-lock.json` v1-v3), Rust (`Cargo.lock`), and Go (`go.mod`), querying OSV.dev batch API.
+- **Multi-VCS Webhook Ingestion**: Supports GitHub, GitLab (`/webhook/gitlab`), and generic CI/CD webhooks (`/webhook/generic`).
+- **Chaos Scenarios**: Built-in experiments include service restart/recovery (`restart_api`), traffic burst load saturation (`traffic_burst`), and corrupt/fuzzed HTTP request injection (`corrupt_requests`).
+- **Conflict-Aware Recovery**: Automated rollback analyzes Git merge conflicts and identifies exact conflicting files when reverts encounter collisions.
+
+## Deployment Scope
+
+This workspace is designed as a single-tenant control panel. Multi-tenant hosted SaaS, cloud OAuth apps, and distributed self-hosted task runner clusters are enterprise additions beyond the local control plane.

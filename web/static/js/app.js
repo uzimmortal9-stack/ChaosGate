@@ -205,7 +205,7 @@
             dashboard. PASS opens the merge. FAIL seals <code>main</code>.
           </p>
           <div class="cta-row">
-            <button class="btn btn-go" data-act="demo">Launch demo console</button>
+            <button class="btn btn-go" data-act="demo">Launch App</button>
             <a class="btn" href="/console/connect">Connect GitHub</a>
           </div>
           <div class="row wrap" style="margin-top:20px;gap:6px">${chips}</div>

@@ -185,6 +185,18 @@ def _probe_grafana() -> Tool:
     return tool
 
 
+def _probe_node() -> Tool:
+    tool = Tool(name="node", binary="node")
+    if not shutil.which("node"):
+        tool.detail = "node is not on PATH — JS unit tests will be skipped"
+        return tool
+    code, out = _run(["node", "--version"], timeout=8)
+    tool.available = code == 0
+    tool.version = _first_line(out) if code == 0 else None
+    tool.detail = f"Node.js {tool.version} ready" if code == 0 else "node present but not runnable"
+    return tool
+
+
 def probe(force: bool = False) -> dict[str, Any]:
     """Return the full capability map, cached briefly so stages stay fast."""
     with _lock:
@@ -194,6 +206,7 @@ def probe(force: bool = False) -> dict[str, Any]:
 
     tools = {
         "git": _probe_git(),
+        "node": _probe_node(),
         "docker": _probe_docker(),
         "kubectl": _probe_kubectl(),
         "k6": _probe_k6(),
@@ -210,6 +223,7 @@ def probe(force: bool = False) -> dict[str, Any]:
             "real_k6": tools["k6"].available,
             "metrics_backend": tools["prometheus"].available,
             "dashboards": tools["grafana"].available and bool(GRAFANA_API_KEY),
+            "node_runtime": tools["node"].available,
         },
     }
     with _lock:

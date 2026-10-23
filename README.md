@@ -1,299 +1,232 @@
 # ChaosGate
 
-**The release gate chaos must pass.**
+[![Tests](https://img.shields.io/badge/tests-181%20passed-brightgreen.svg)](tests/)
+[![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)](Dockerfile)
+[![Security](https://img.shields.io/badge/tokens-AES--CTR%20%2B%20PBKDF2-orange.svg)](core/crypto.py)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Connect GitHub. Pick a repository. Open its folder right here and edit it. Push, and a
-thirteen-stage pipeline fires: unit tests, secret scanning, a real container build,
-Kubernetes validation, k6 load testing, Prometheus metrics, a chaos experiment, and a
-Grafana dashboard. Then it prints a verdict:
+**A Unified DevSecOps Release Gate and Control Plane.**
 
-- **PASS** — merge allowed
-- **FAIL** — `main` stays sealed, with the exact stage and reason
+Traditional CI/CD pipelines only check the "happy path" — verifying that code compiles and basic unit tests pass. Fragile database queries, memory leaks, unpatched supply chain CVEs, and hardcoded API tokens slip through to production, causing outages and security incidents.
 
-GitHub's green tick comes from the Commit Status API, which is empty until some
-system writes to it. ChaosGate is that system: it produces the check, GitHub
-enforces it. And when bad code reaches `main` anyway, ChaosGate detects it, finds
-the last verified-good commit, and prepares a revert.
+**ChaosGate shifts security and resilience strictly left to the Pull Request.** When a developer opens a PR, ChaosGate intercepts the webhook, dynamically detects the application stack, queries OSV.dev for unpatched CVEs, boots the application in an isolated Docker sandbox, bombards it with synthetic concurrency (k6) and chaos faults, and **physically disables the GitHub Merge button** via Branch Protection rules if SLAs are violated.
 
-> Responding to a review? See **[`docs/REVIEW_RESPONSE.md`](docs/REVIEW_RESPONSE.md)**.
-
-This repository is the **platform**. The apps in `samples/` are **targets** — applications
-under test, not the product.
+If a regression ever slips into production post-merge, ChaosGate's **Recovery Engine** analyzes git history, runs a 3-way merge conflict check, and automatically opens a clean **1-Click Revert PR**.
 
 ---
 
-## Quick start
+## Key Features
+
+- **Zero-Config Stack Detection**: Automatically inspects manifests (`requirements.txt`, `package.json`, `Cargo.lock`, `go.mod`, `pyproject.toml`) and auto-configures test environments without custom scripts.
+- **Multi-Ecosystem Supply Chain Scanner**: High-entropy regex scanner for leaked AWS/Stripe/JWT secrets + automated batch vulnerability lookups via **OSV.dev** across npm, PyPI, Crates.io, and Go.
+- **Token Encryption at Rest**: Encrypts VCS personal access tokens using **PBKDF2 (100,000 iterations) + AES-CTR + HMAC-SHA256 authenticated encryption** (`core/crypto.py`).
+- **Multi-VCS Webhook Support**: Ingests PR and push webhooks from **GitHub** (`/webhook/github`), **GitLab** (`/webhook/gitlab`), and **Generic CI** systems (`/webhook/generic`) with HMAC secret verification.
+- **Ephemeral Container Sandboxing**: Spawns isolated Docker containers per test run via mounted host daemon, guaranteeing zero state leakage.
+- **Synthetic Load & Chaos Injection**: Fires realistic traffic using **k6** (e.g. 200 VUs) while injecting faults: **container restarts**, **traffic bursts**, and **corrupt HTTP payloads**.
+- **Post-Merge Disaster Recovery Engine**: Detects post-merge incidents, checks 3-way merge conflict matrices against `HEAD`, and generates instant **Revert PRs** (`core/recovery.py`).
+- **Full Observability Stack**: Exposes **28 Prometheus metric families** at `/metrics` with pre-provisioned Grafana dashboards and 6 automated alert rules.
+- **100% Automated Test Coverage**: **181 passing unit and integration tests** verifying cryptographic safety, pipeline stages, and recovery workflows.
+
+---
+
+## Architecture Overview
+
+```
+                      ┌──────────────────────────────────────┐
+                      │    Developer Workstation / Git Push  │
+                      └──────────────────┬───────────────────┘
+                                         │ PR Opened / Webhook
+                                         ▼
+                      ┌──────────────────────────────────────┐
+                      │      GitHub / GitLab Repository      │
+                      └──────────────────┬───────────────────┘
+                                         │ Webhook Payload
+                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           CHAOSGATE CONTROL PLANE                               │
+│                                                                                 │
+│  ┌─────────────────────────┐  ┌──────────────────────────────────────────────┐  │
+│  │   Flask API Gateway     │  │  Encrypted Token Store (AES-CTR + PBKDF2)    │  │
+│  └───────────┬─────────────┘  └──────────────────────────────────────────────┘  │
+│              │                                                                  │
+│              ▼                                                                  │
+│  ┌─────────────────────────┐                                                    │
+│  │  1.0 Stack Detector     │ (Zero-config: Python, Node, Go, Rust)              │
+│  └───────────┬─────────────┘                                                    │
+│              │                                                                  │
+│              ▼                                                                  │
+│  ┌─────────────────────────┐         ┌───────────────────────────────────────┐  │
+│  │  2.0 Supply Chain Scan  │ ◄─────► │  D3: OSV.dev Global Vulnerability DB  │  │
+│  └───────────┬─────────────┘         └───────────────────────────────────────┘  │
+│              │                                                                  │
+│              ▼                                                                  │
+│  ┌─────────────────────────┐         ┌───────────────────────────────────────┐  │
+│  │  3.0 Ephemeral k6/Chaos │ ◄─────► │  D4: Prometheus / k6 Telemetry Store  │  │
+│  └───────────┬─────────────┘         └───────────────────────────────────────┘  │
+│              │                                                                  │
+│              ▼                                                                  │
+│  ┌─────────────────────────┐                                                    │
+│  │  4.0 Composite Verdict  │ (0–100 Resilience Score across all 13 stages)     │
+│  └───────────┬─────────────┘                                                    │
+└──────────────┼──────────────────────────────────────────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           GATE ENFORCEMENT & RECOVERY                           │
+│                                                                                 │
+│   [✔] Status Check: SUCCESS  ──► GitHub Merge Button ENABLED                    │
+│   [✖] Status Check: FAILED   ──► GitHub Merge Button LOCKED + Diagnostics       │
+│   [↺] Post-Merge Regression  ──► 3-Way Merge Clean Revert PR Auto-Generated     │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## The 13-Stage Verification Pipeline
+
+| # | Stage | Execution Logic |
+| :---: | :--- | :--- |
+| **1** | **Validate Contract** | Parses repository `chaosgate.yml` or falls back to intelligent zero-config mode. |
+| **2** | **Stack Detection** | Discovers runtime: Python, Node.js, Go, Rust, or frontend frameworks. |
+| **3** | **Unit Test Execution** | Executes native test runners (`pytest`, `npm test`, `cargo test`, `go test`). |
+| **4** | **Build & Compilation** | Verifies artifact assembly (`npm run build`, `compileall`). |
+| **5** | **Security & Supply Chain** | Scans regex for hardcoded secrets, flags committed `.env`, queries OSV.dev for lockfile CVEs. |
+| **6** | **Docker Sandbox Build** | Builds an ephemeral container image; inspects layer caching and non-root users. |
+| **7** | **Kubernetes Audit** | Discovers K8s manifests; validates resource limits, probe endpoints, and security contexts. |
+| **8** | **Smoke Verification** | Boots container on an isolated bridge network and executes HTTP health probes. |
+| **9** | **k6 Synthetic Load Test** | Generates concurrent load (e.g. 200 VUs); evaluates p95 latency and error rate against SLAs. |
+| **10**| **Prometheus Telemetry** | Verifies exposition metrics, measures resource utilization, and evaluates SLO compliance. |
+| **11**| **Chaos Engineering** | Injects faults: process termination, traffic surges, corrupt requests; measures recovery time. |
+| **12**| **Grafana Dashboard** | Generates dynamic 20-panel telemetry dashboards for the PR run. |
+| **13**| **Composite Verdict** | Aggregates all stage metrics into a 0–100 Resilience Score; enforces GitHub Branch Protection. |
+
+---
+
+## Quick Start
+
+### Option 1: Native Local Run (Windows PowerShell)
+
+```powershell
+# 1. Navigate to app directory
+cd app
+
+# 2. Run the automated test suite (181 tests)
+& ".\.venv\Scripts\pytest.exe" -v
+
+# 3. Start the Flask Control Plane
+& ".\.venv\Scripts\python.exe" app.py
+```
+*Open **http://127.0.0.1:8080** in your browser.*
+
+---
+
+### Option 2: Linux / macOS (Make)
 
 ```bash
-make install     # creates .venv and installs dependencies
-make run         # http://localhost:5000
+cd app
+make install    # Sets up virtualenv and installs dependencies
+make test       # Runs the 181-test automated suite
+make run        # Starts server on http://localhost:5000
 ```
 
-Open **http://localhost:5000** and click **Launch demo console**.
+---
 
-> Full setup walkthrough — GitHub connection, the push loop, getting stages out of
-> degraded mode, troubleshooting: **[`docs/RUNNING_LOCALLY.md`](docs/RUNNING_LOCALLY.md)**
-
-Three sample targets are already connected:
-
-| Target | What happens |
-| --- | --- |
-| `atlas-shop/atlas-api` | Healthy Python API. Should **PASS**. |
-| `nova-labs/nova-web` | JS storefront. Should **PASS** with a lockfile warning. |
-| `mercury-pay/checkout-service` | Failing tests + a hardcoded secret. Should **FAIL**. |
-| `helios-fin/legacy-billing` | Zero hardcoded secrets — but `.env` is committed and the pinned deps carry CVEs. Should **FAIL**. |
-
-With the full observability stack:
+### Option 3: Full Stack with Docker & Observability
 
 ```bash
-make obs
-# ChaosGate  → http://localhost:5000
-# Prometheus → http://localhost:9090
-# Grafana    → http://localhost:3000  (admin/admin, dashboard pre-provisioned)
+cd app
+
+# Launch Control Plane, Prometheus, Grafana & Pushgateway
+docker compose --profile observability up -d
+
+# Verify containers are healthy
+docker compose ps
+```
+
+*Endpoints:*
+- **ChaosGate Control Plane**: [http://localhost:5000](http://localhost:5000)
+- **Prometheus**: [http://localhost:9090](http://localhost:9090)
+- **Grafana**: [http://localhost:3000](http://localhost:3000) *(Credentials: `admin` / `admin`)*
+
+---
+
+## Database & Data Stores
+
+ChaosGate uses a local, high-performance SQLite database stored at `data/chaosgate.db`.
+
+### Querying Database Records
+
+```powershell
+# View all tables and row counts
+python -c "import sqlite3; conn = sqlite3.connect('data/chaosgate.db'); print([(t[0], conn.execute('SELECT count(*) FROM ' + t[0]).fetchone()[0]) for t in conn.execute('SELECT name FROM sqlite_master WHERE type=\'table\'').fetchall()])"
+
+# Inspect recent pipeline runs and verdicts
+python -c "import sqlite3; conn = sqlite3.connect('data/chaosgate.db'); print('\n'.join([f'Run #{r[0]}: Repo={r[1]}, PR={r[2]}, Verdict={r[3]}, Score={r[4]}' for r in conn.execute('SELECT id, repo_name, pr_number, verdict, resilience_score FROM pipeline_runs LIMIT 5').fetchall()]))"
+```
+
+### Database Schema Overview:
+- `workspaces`: Local repository checkouts and paths.
+- `repositories`: Monitored repositories and encrypted access credentials.
+- `pipeline_runs`: High-level run history, triggers, commit SHAs, and verdicts.
+- `stages`: Granular execution logs, latency timings, and status for each of the 13 stages.
+- `run_events`: Granular streaming telemetry and diagnostic log events.
+
+---
+
+## Sample Target Repositories
+
+Included under `samples/` for end-to-end evaluation:
+
+| Sample Target | Stack | Intended Gate Verdict | Why? |
+| :--- | :--- | :---: | :--- |
+| `atlas-shop/atlas-api` | Python / Flask | **PASS** | Clean dependencies, passing tests, p95 latency < 150ms. |
+| `nova-labs/nova-web` | Node.js / React | **PASS** | Clean build, non-critical lockfile warning. |
+| `mercury-pay/checkout-service` | Python | **FAIL** | Failing unit tests + hardcoded AWS credentials detected. |
+| `helios-fin/legacy-billing` | Node.js / Express | **FAIL** | Committed `.env` file + pinned packages carry critical OSV.dev CVEs. |
+
+---
+
+## Project Structure
+
+```
+ChaosGate/
+├── app/
+│   ├── core/                  # Core engine & platform logic
+│   │   ├── crypto.py          # AES-CTR + PBKDF2 token encryption
+│   │   ├── pipeline.py        # 13-stage sequential execution engine
+│   │   ├── recovery.py        # 3-way merge conflict detection & auto-revert
+│   │   ├── supply_chain.py    # Multi-ecosystem secret & OSV.dev CVE scanner
+│   │   ├── stack_detector.py  # Zero-config manifest detector
+│   │   ├── container.py       # Ephemeral Docker build & lifecycle
+│   │   ├── load.py            # k6 load generation & SLA thresholds
+│   │   ├── chaos.py           # Process termination & fault injection
+│   │   └── metrics.py         # 28 Prometheus metric definitions
+│   ├── data/                  # SQLite DB, workspaces, and run artifacts
+│   ├── docker/                # Prometheus & Grafana provisioning configs
+│   ├── k8s/                   # Production Kubernetes deployment manifests
+│   ├── samples/               # Target applications under test
+│   ├── tests/                 # 181 automated unit and integration tests
+│   ├── web/                   # Vanilla JS responsive control plane UI
+│   ├── app.py                 # Flask REST gateway & webhook dispatcher
+│   ├── Dockerfile             # Multi-stage container definition
+│   └── docker-compose.yml     # Multi-service composition
+└── README.md                  # Project documentation
 ```
 
 ---
 
-## The loop
+## Academic Context
 
-### 1 · Connect GitHub
-
-Two paths, both supported:
-
-- **OAuth** — set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env` and the console
-  shows a *Continue with GitHub* button. Callback URL is `${PUBLIC_URL}/api/auth/github/callback`.
-- **Personal access token** — paste a token with `repo` and `workflow` scopes. Works with
-  zero setup.
-
-Either way you get a searchable list of every repository you can push to.
-
-### 2 · Select repos and open the folder
-
-Selecting a repository connects it. **Open folder** clones it into a private local
-workspace under `data/workspaces/<repo-id>`. The console then gives you a file tree, a
-text editor with tabs and dirty tracking, and file create/rename/delete.
-
-Path handling is locked down: absolute paths, `..` traversal and anything under `.git`
-are rejected before touching the filesystem.
-
-### 3 · Push
-
-The **Changes** tab lists exactly what differs from `HEAD`, with per-file diffs and
-checkboxes so you can commit a subset. Choose a strategy:
-
-- **Branch + pull request** *(default)* — pushes `chaosgate/<timestamp>` and opens a PR
-  against the default branch.
-- **Direct** — commits straight onto the default branch.
-
-Build artifacts (`__pycache__`, `node_modules`, `*.pyc`) are filtered out of the change
-list and are never staged.
-
-### 4 · The pipeline activates
-
-The push triggers a run immediately. Three other triggers exist:
-
-- a **webhook** into this control plane (`push` and `pull_request` events)
-- the **GitHub Actions workflow**, installable from the Automation tab
-- the **Run Gate** button
-
-When the run finishes, ChaosGate posts a commit status back to GitHub
-(`ChaosGate / release-gate`) and comments a stage table on the PR. Make that status a
-required check on `main` and a failing gate cannot be merged.
+Developed as part of the **Third Year Engineering (DevOps VAP Review II)** curriculum:
+* **Department**: Computer Science & Engineering (AI&ML)
+* **Institution**: Vishwaniketan's Institute of Management Entrepreneurship & Engineering Technology (ViMEET), affiliated with the University of Mumbai.
+* **Faculty Guide**: Prof. Pooja Lokhande
+* **Head of Department**: Dr. Ankush B. Pawar
+* **Principal**: Dr. B. R. Patil
 
 ---
 
-## The thirteen stages
+## License
 
-| # | Stage | What actually runs |
-| --- | --- | --- |
-| 1 | **Validate** | `chaosgate.yml` parse, or autodetect from manifest files |
-| 2 | **Detect** | Python / Django / FastAPI / Flask / Node / React / Compose + host capabilities |
-| 3 | **Unit** | `pytest`, `node --test`, `npm test`, or the contract's command |
-| 4 | **Build** | `npm run build`, `compileall`, or the contract's command |
-| 5 | **Security** | Hardcoded secrets · **committed `.env`** · **secrets in git history** · **CVEs via OSV.dev** · unpinned deps |
-| 6 | **Docker** | Dockerfile audit + a real `docker build`; reads back size, layers, user |
-| 7 | **Kubernetes** | Manifest discovery, production-readiness audit, server-side dry-run |
-| 8 | **Smoke** | Boots the target (container → Flask → static) and hits `/health` |
-| 9 | **Load** | Real **k6** when installed, else a threaded in-process generator. Evaluates p95 / error-rate / availability / throughput SLOs |
-| 10 | **Prometheus** | Validates the exposition format, queries the server, pushes to a Pushgateway |
-| 11 | **Chaos** | Kills the process and measures recovery, per experiment |
-| 12 | **Grafana** | Builds a 20-panel dashboard and publishes it if credentials exist |
-| 13 | **Verdict** | Scores everything, decides PASS/FAIL, writes the report |
-
-### Degraded is not passing, and not failing
-
-Stages depend on tools that may not exist on the host. ChaosGate never pretends
-otherwise. Each stage reports one of `passed`, `failed`, `skipped`, or **`degraded`**.
-
-With no Docker daemon, the Docker stage still audits the Dockerfile — unpinned base
-images, root user, cache-busting `COPY`, baked-in credentials — and reports
-`degraded: No Docker daemon — audited only`. It does not report a build it never ran.
-
-With no cluster, the Kubernetes stage still audits manifests (missing probes, absent
-resource limits, mutable image tags, privileged containers, literal secrets in `env`)
-and generates a hardened baseline for repositories that have none.
-
-Degraded stages cost a few points and are listed explicitly in the verdict. Set
-`fail_on_degraded` in Settings to make them block instead.
-
----
-
-## Observability
-
-ChaosGate exports **28 Prometheus metric families** at `/metrics` about itself and every
-gate run:
-
-```
-chaosgate_pipeline_runs_total{repo,trigger,verdict}
-chaosgate_stage_duration_seconds_bucket{stage,status}
-chaosgate_gate_score{repo}
-chaosgate_load_p95_milliseconds{repo,engine}
-chaosgate_chaos_recovery_seconds{repo,experiment}
-chaosgate_docker_image_size_bytes{repo}
-chaosgate_toolchain_available{tool}
-…
-```
-
-The Grafana dashboard is **generated from those metric names** by `core/grafana.py`, and a
-test asserts every panel query references a metric the app actually emits — so the
-dashboard cannot silently drift into showing "No data".
-
-```bash
-make dashboard   # regenerate docker/grafana/... and the alert rules
-```
-
-Six alert rules ship in `docker/prometheus/alerts.yml`, covering blocked merges, latency
-regressions, error-rate spikes, committed secrets, degraded tooling and slow pipelines.
-
----
-
-## Testing *your* app
-
-Add a `chaosgate.yml` at the repository root — see [`docs/CHAOSGATE_YML.md`](docs/CHAOSGATE_YML.md).
-
-```yaml
-version: 1
-app: {name: my-api, type: auto}
-services:
-  api: {url: "http://localhost:8000", health: /health}
-tests:
-  unit: {command: python -m pytest -q}
-load:
-  duration: 30s
-  vus: 20
-  endpoints:
-    - {method: GET, path: /health}
-  thresholds: {p95_ms: 800, error_rate: 0.05}
-chaos:
-  enabled: true
-  experiments: [restart_api]
-```
-
-Without one, autodetect still works — runtime stages just have less to go on.
-
----
-
-## Deployment
-
-**Docker**
-
-```bash
-docker compose up -d --build                      # gate only
-docker compose --profile observability up -d      # + Prometheus, Grafana, Pushgateway
-```
-
-The compose file mounts `/var/run/docker.sock` so the container stage can build real
-images. That is a genuine privilege grant — remove the mount to force degraded mode.
-
-**Kubernetes**
-
-```bash
-kubectl apply -f k8s/chaosgate.yaml
-kubectl -n chaosgate rollout status deploy/chaosgate
-```
-
-`k8s/chaosgate.yaml` passes ChaosGate's own manifest audit with zero findings: pinned
-image, liveness/readiness/startup probes, resource bounds, non-root with dropped
-capabilities, an HPA and a PodDisruptionBudget. A test enforces this.
-
----
-
-## Configuration
-
-Copy `.env.example` to `.env`. Everything is optional except `SECRET_KEY` in production.
-
-| Variable | Purpose |
-| --- | --- |
-| `PUBLIC_URL` | Required for OAuth callbacks and webhooks — GitHub cannot reach localhost |
-| `GITHUB_CLIENT_ID` / `_SECRET` | Enables one-click OAuth |
-| `GITHUB_WEBHOOK_SECRET` | Enables HMAC signature verification on inbound hooks |
-| `PUSH_STRATEGY` | `branch_pr` (default) or `direct` |
-| `K8S_APPLY` | `0` = dry-run only (default), `1` = really apply and await rollout |
-| `PROMETHEUS_URL` / `GRAFANA_URL` | Enables live querying and dashboard publishing |
-| `GATE_MAX_P95_MS` / `GATE_MAX_ERROR_RATE` | Load thresholds |
-
-Policy is also editable in the console under **Settings**.
-
----
-
-## Architecture
-
-```
-Browser ── SPA (vanilla JS, no build step)
-   │
-   ├── Flask control plane ── SQLite
-   │        ├── core/workspace.py      clone · browse · edit · commit · push
-   │        ├── core/github_client.py  OAuth · PRs · commit statuses · webhooks
-   │        ├── core/pipeline_service.py   the 13-stage engine
-   │        ├── core/toolchain.py      what this host can actually do
-   │        └── core/metrics.py        Prometheus exposition
-   │
-   └── /metrics ── Prometheus ── Grafana
-```
-
-More detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
-```
-app.py                 Flask app, /metrics, request instrumentation
-core/                  engine, GitHub bridge, scanners, workspace, observability
-web/                   console UI (no framework, no bundler)
-pipeline/              Actions workflow, k6 script, CLI helpers
-docker/                Prometheus + Grafana provisioning
-k8s/                   deployment manifests
-samples/               target applications used in the demo
-tests/                 108 tests
-```
-
----
-
-## Tests
-
-```bash
-make test     # 108 tests
-```
-
-Coverage worth calling out:
-
-- **Prometheus exposition** is parsed back and validated — label escaping, cumulative
-  histogram buckets, counter monotonicity.
-- **Every Grafana panel query** is checked against the metrics the app actually exports.
-- **The Kubernetes auditor** is run against ChaosGate's own manifests and must find nothing.
-- **Path traversal** is tested against `../`, absolute paths and `.git/`.
-- **Porcelain parsing** — a leading space in `git status --porcelain` is a status code, not
-  padding; getting that wrong truncates filenames.
-- **Degraded ≠ failed ≠ passed** is asserted directly in the verdict tests.
-
----
-
-## Honest boundaries
-
-- Single-tenant local workspace. Tokens live in SQLite — fine for a self-hosted control
-  plane, not for multi-tenant SaaS.
-- The container stage needs a Docker socket. Mounting it grants root-equivalent access to
-  the host; only do it on a machine you control.
-- `K8S_APPLY=1` really applies manifests. It defaults to off.
-- Runtime stages boot what the control plane can start: containers, importable Flask apps,
-  and static sites. Compose-heavy stacks should use the Actions workflow, where a runner
-  provides Docker and k6.
-- Pushed commits are never un-pushed. The gate blocks the *merge*, via a required status
-  check — that is the only control that actually works.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

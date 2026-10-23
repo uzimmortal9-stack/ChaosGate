@@ -186,3 +186,13 @@ def test_execute_revert_requires_token():
     result = recovery.execute_revert("repo_1", "acme/api", "", "abc123", "main")
     assert result["ok"] is False
     assert "token" in result["reason"]
+
+
+def test_incident_body_includes_conflicts(session, repo):
+    bad = _run(session, repo, "ccc3333", "FAIL", datetime(2026, 1, 1))
+    plan = recovery.build_revert_plan(session, repo, bad)
+    plan["conflicts"] = ["app/main.py", "config.yml"]
+    body = recovery.incident_body(repo, bad, plan, None)
+    assert "### Conflicting files" in body
+    assert "- `app/main.py`" in body
+    assert "- `config.yml`" in body

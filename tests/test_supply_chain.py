@@ -219,6 +219,78 @@ def test_malformed_lockfile_does_not_raise(tmp_path):
     assert sc.parse_package_lock(tmp_path) == []
 
 
+def test_parse_poetry_lock(tmp_path):
+    (tmp_path / "poetry.lock").write_text(
+        '[[package]]\nname = "flask"\nversion = "2.2.5"\n\n'
+        '[[package]]\nname = "requests"\nversion = "2.31.0"\n'
+    )
+    pkgs = sc.parse_poetry_lock(tmp_path)
+    assert len(pkgs) == 2
+    names = {p["name"]: p["version"] for p in pkgs}
+    assert names["flask"] == "2.2.5"
+    assert names["requests"] == "2.31.0"
+    assert all(p["ecosystem"] == "PyPI" for p in pkgs)
+
+
+def test_parse_pipfile_lock(tmp_path):
+    (tmp_path / "Pipfile.lock").write_text(
+        '{"_meta": {}, "default": {"urllib3": {"version": "==1.26.15"}}, '
+        '"develop": {"pytest": {"version": "==7.4.0"}}}'
+    )
+    pkgs = sc.parse_pipfile_lock(tmp_path)
+    names = {p["name"]: p["version"] for p in pkgs}
+    assert names["urllib3"] == "1.26.15"
+    assert names["pytest"] == "7.4.0"
+    assert all(p["ecosystem"] == "PyPI" for p in pkgs)
+
+
+def test_parse_pyproject_pep621_and_poetry(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\n'
+        'dependencies = [\n'
+        '    "fastapi==0.104.1",\n'
+        '    "pydantic>=2.0"\n'
+        ']\n\n'
+        '[tool.poetry.dependencies]\n'
+        'python = "^3.11"\n'
+        'uvicorn = "==0.24.0"\n'
+    )
+    pkgs = sc.parse_pyproject(tmp_path)
+    names = {p["name"]: p["version"] for p in pkgs}
+    assert names["fastapi"] == "0.104.1"
+    assert names["uvicorn"] == "0.24.0"
+    assert "python" not in names
+    assert all(p["ecosystem"] == "PyPI" for p in pkgs)
+
+
+def test_parse_cargo_lock(tmp_path):
+    (tmp_path / "Cargo.lock").write_text(
+        '[[package]]\nname = "tokio"\nversion = "1.38.0"\n\n'
+        '[[package]]\nname = "serde"\nversion = "1.0.200"\n'
+    )
+    pkgs = sc.parse_cargo_lock(tmp_path)
+    names = {p["name"]: p["version"] for p in pkgs}
+    assert names["tokio"] == "1.38.0"
+    assert names["serde"] == "1.0.200"
+    assert all(p["ecosystem"] == "crates.io" for p in pkgs)
+
+
+def test_parse_go_mod(tmp_path):
+    (tmp_path / "go.mod").write_text(
+        "module testapp\n\n"
+        "go 1.21\n\n"
+        "require (\n"
+        "    github.com/gin-gonic/gin v1.9.1\n"
+        "    golang.org/x/crypto v0.21.0 // indirect\n"
+        ")\n"
+    )
+    pkgs = sc.parse_go_mod(tmp_path)
+    names = {p["name"]: p["version"] for p in pkgs}
+    assert names["github.com/gin-gonic/gin"] == "v1.9.1"
+    assert names["golang.org/x/crypto"] == "v0.21.0"
+    assert all(p["ecosystem"] == "Go" for p in pkgs)
+
+
 # ----------------------------------------------------------- CVSS severity
 @pytest.mark.parametrize(
     "score,high",

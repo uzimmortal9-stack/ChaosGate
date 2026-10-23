@@ -981,3 +981,88 @@ def github_webhook():
         return jsonify({"ok": True, "ran": True, "run_id": run.id})
     finally:
         db.close()
+
+
+@hooks.post("/webhook/gitlab")
+def gitlab_webhook():
+    token = request.headers.get("X-Gitlab-Token", "")
+    event_name = request.headers.get("X-Gitlab-Event", "Push Hook")
+    payload = request.get_json(silent=True) or {}
+
+    if GITHUB_WEBHOOK_SECRET and token != GITHUB_WEBHOOK_SECRET:
+        metrics.webhook_events_total.inc(event="gitlab", result="bad-token")
+        return _err("Invalid webhook token", 401)
+
+    project = payload.get("project") or {}
+    repo_full = project.get("path_with_namespace") or project.get("name")
+    branch = (payload.get("ref") or "").replace("refs/heads/", "") or None
+    sha = payload.get("after") or payload.get("checkout_sha")
+    commit_message = None
+
+    commits = payload.get("commits") or []
+    if commits:
+        commit_message = (commits[-1].get("message") or "").split("\n")[0][:200]
+
+    db = _db()
+    try:
+        record = WebhookEvent(
+            delivery_id=None,
+            event=f"gitlab:{event_name}",
+            repo_full_name=repo_full,
+            branch=branch,
+            sha=sha,
+            action=event_name,
+            verified=bool(not GITHUB_WEBHOOK_SECRET or token == GITHUB_WEBHOOK_SECRET),
+        )
+        db.add(record)
+        db.commit()
+
+        if not repo_full:
+            return jsonify({"ok": True, "ran": False, "reason": "No project identified"})
+
+        repo = db.query(Repository).filter_by(full_name=repo_full).first()
+        if not repo:
+            record.note = f"{repo_full} is not connected to this workspace"
+            db.commit()
+            return jsonify({"ok": True, "ran": False, "reason": record.note})
+
+        run = create_run(
+            db, repo, trigger=f"gitlab:{event_name}", branch=branch or repo.default_branch,
+            commit_sha=sha, commit_message=commit_message,
+        )
+        record.triggered_run_id = run.id
+        record.note = f"Started gate run {run.id}"
+        db.commit()
+        start_run_async(run.id, repo.workspace.github_token if repo.workspace else None)
+        return jsonify({"ok": True, "ran": True, "run_id": run.id})
+    finally:
+        db.close()
+
+
+@hooks.post("/webhook/generic")
+def generic_webhook():
+    payload = request.get_json(silent=True) or {}
+    token = request.headers.get("X-ChaosGate-Secret") or payload.get("secret")
+
+    if GITHUB_WEBHOOK_SECRET and token != GITHUB_WEBHOOK_SECRET:
+        return _err("Invalid secret token", 401)
+
+    repo_full = payload.get("repo") or payload.get("repository")
+    branch = payload.get("branch") or "main"
+    sha = payload.get("sha")
+    commit_message = payload.get("message") or "Triggered via generic webhook"
+
+    db = _db()
+    try:
+        repo = db.query(Repository).filter_by(full_name=repo_full).first()
+        if not repo:
+            return _err(f"Repository {repo_full} not found", 404)
+
+        run = create_run(
+            db, repo, trigger="webhook:generic", branch=branch,
+            commit_sha=sha, commit_message=commit_message,
+        )
+        start_run_async(run.id, repo.workspace.github_token if repo.workspace else None)
+        return jsonify({"ok": True, "ran": True, "run_id": run.id})
+    finally:
+        db.close()

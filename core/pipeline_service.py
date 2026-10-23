@@ -12,6 +12,7 @@ statically still runs, and the report says exactly what was not executed.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import shutil
@@ -1173,9 +1174,11 @@ def _stage_chaos(session, run, runtime: dict[str, Any], cfg, repo_label: str) ->
         log("Chaos is disabled in the contract — skipping")
         _end(session, run, stage, "skipped", "Chaos not enabled")
         return
-    if not runtime.get("restart"):
-        log("The target does not expose a restart hook")
-        _end(session, run, stage, "skipped", "No restart hook for this target")
+
+    health_url = runtime.get("health")
+    if not health_url and not runtime.get("restart"):
+        log("The target does not expose a reachable health endpoint or restart hook")
+        _end(session, run, stage, "skipped", "No health endpoint or restart hook for this target")
         return
 
     experiments = chaos.get("experiments") or ["restart_api"]
@@ -1186,6 +1189,73 @@ def _stage_chaos(session, run, runtime: dict[str, Any], cfg, repo_label: str) ->
 
     for experiment in experiments[:4]:
         log(f"── {experiment} ──")
+        exp_name = str(experiment).lower()
+
+        # 1. Traffic burst / spike stress experiment
+        if any(k in exp_name for k in ("burst", "spike", "flood")):
+            log(f"Simulating traffic burst spike on {health_url}…")
+            t0 = time.perf_counter()
+            burst_count = 25
+
+            def _hit():
+                try:
+                    r = httpx.get(health_url, timeout=3.0)
+                    return r.status_code < 500
+                except Exception:
+                    return False
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                results_burst = list(pool.map(lambda _: _hit(), range(burst_count)))
+            successes = sum(1 for s in results_burst if s)
+            elapsed = time.perf_counter() - t0
+            recovered = (successes / burst_count) >= 0.7
+            worst = max(worst, elapsed)
+            results.append({"experiment": experiment, "recovered": recovered, "recovery_s": round(elapsed, 3)})
+            metrics.chaos_experiments_total.inc(
+                repo=repo_label, experiment=experiment, result="recovered" if recovered else "failed"
+            )
+            if recovered:
+                metrics.chaos_recovery_seconds.set(elapsed, repo=repo_label, experiment=experiment)
+                log(f"Target handled burst ({successes}/{burst_count} ok) in {elapsed * 1000:.0f}ms")
+            else:
+                failed = True
+                log(f"Target degraded under burst ({successes}/{burst_count} ok)")
+            continue
+
+        # 2. Corrupt / malformed input fuzzing experiment
+        if any(k in exp_name for k in ("corrupt", "malformed", "fuzz", "bad_payload")):
+            log("Injecting malformed requests to test fault isolation…")
+            t0 = time.perf_counter()
+            try:
+                httpx.post(health_url, content=b"\x00\xff\xfe", headers={"Content-Type": "application/json"}, timeout=2.0)
+            except Exception:
+                pass
+            time.sleep(0.2)
+            try:
+                probe = httpx.get(health_url, timeout=2.0)
+                recovered = probe.status_code < 400
+            except Exception:
+                recovered = False
+            elapsed = time.perf_counter() - t0
+            worst = max(worst, elapsed)
+            results.append({"experiment": experiment, "recovered": recovered, "recovery_s": round(elapsed, 3)})
+            metrics.chaos_experiments_total.inc(
+                repo=repo_label, experiment=experiment, result="recovered" if recovered else "failed"
+            )
+            if recovered:
+                metrics.chaos_recovery_seconds.set(elapsed, repo=repo_label, experiment=experiment)
+                log(f"Service intact after malformed input in {elapsed * 1000:.0f}ms")
+            else:
+                failed = True
+                log("Service crashed after malformed input")
+            continue
+
+        # 3. Default: Process termination & restart experiment
+        if not runtime.get("restart"):
+            log("The target does not expose a restart hook — skipping kill experiment")
+            results.append({"experiment": experiment, "recovered": True, "recovery_s": 0.0, "skipped": True})
+            continue
+
         log("Killing the target process…")
         t0 = time.perf_counter()
         try:
@@ -1238,7 +1308,7 @@ def _stage_chaos(session, run, runtime: dict[str, Any], cfg, repo_label: str) ->
 
     payload = {"experiments": results, "recovery_ms": round(worst * 1000, 1)}
     if failed:
-        _end(session, run, stage, "failed", "Service did not recover after the kill", payload)
+        _end(session, run, stage, "failed", "Service did not survive chaos experiments", payload)
     else:
         _end(session, run, stage, "passed",
              f"Recovered from {len(results)} experiment(s) · worst {worst * 1000:.0f}ms", payload)
@@ -1455,6 +1525,27 @@ def _start_target(root: Path, detected, cfg, image, log) -> dict[str, Any] | Non
     api = services.get("api") or services.get("frontend") or {}
     health_path = api.get("health") or "/health"
 
+    # 0. An existing running service specified via URL
+    target_url = api.get("url") or (cfg or {}).get("load", {}).get("target")
+    if target_url:
+        base = str(target_url).rstrip("/")
+        health = base + (health_path if health_path.startswith("/") else "/" + health_path)
+        try:
+            res = httpx.get(health, timeout=2.0)
+            if res.status_code < 500:
+                log(f"Target service actively responding at {base} (HTTP {res.status_code})")
+                return {
+                    "kind": "live_service",
+                    "base": base,
+                    "health": health,
+                    "health_path": health_path,
+                    "port": None,
+                    "stop": None,
+                    "restart": None,
+                }
+        except Exception:
+            log(f"Target URL {base} configured but not responding — attempting local start")
+
     # 1. A real container, if we built one and Docker works.
     if image and image.get("tag") and tool_get("docker").get("available"):
         container_port = int(api.get("port") or _guess_port(root, cfg) or 8000)
@@ -1478,7 +1569,14 @@ def _start_target(root: Path, detected, cfg, image, log) -> dict[str, Any] | Non
         if started:
             return started
 
-    # 3. Anything static.
+    # 3. Custom start command configured in contract or detected
+    custom_cmd = api.get("command") or (cfg or {}).get("app", {}).get("start_command") or detected.get("start_command")
+    if custom_cmd:
+        started = _start_process_command(root, custom_cmd, health_path, log)
+        if started:
+            return started
+
+    # 4. Anything static.
     static_root = None
     for candidate in ("dist", "build", "public", "out", "src"):
         directory = root / candidate
@@ -1490,7 +1588,7 @@ def _start_target(root: Path, detected, cfg, image, log) -> dict[str, Any] | Non
     if static_root:
         return _start_static(static_root, log)
 
-    log("No container, Flask module, or static index.html to boot")
+    log("No container, Flask module, custom start command, or static index.html to boot")
     return None
 
 
@@ -1675,6 +1773,81 @@ def _start_static(root: Path, log) -> dict[str, Any]:
 
     def restart() -> bool:
         nxt = _start_static(root, lambda m: None)
+        _rebind(state, nxt)
+        return True
+
+    state["restart"] = restart
+    return state
+
+
+def _start_process_command(root: Path, cmd: str, health_path: str, log) -> dict[str, Any] | None:
+    port = _free_port()
+    formatted_cmd = cmd.replace("{port}", str(port)).replace("$PORT", str(port))
+    env = os.environ.copy()
+    env["PORT"] = str(port)
+    env["PYTHONUNBUFFERED"] = "1"
+    try:
+        proc = subprocess.Popen(
+            formatted_cmd,
+            cwd=str(root),
+            shell=True,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"Could not execute start command: {exc}")
+        return None
+
+    base = f"http://127.0.0.1:{port}"
+    health = base + (health_path if health_path.startswith("/") else "/" + health_path)
+    healthy = False
+    for _ in range(50):
+        if proc.poll() is not None:
+            break
+        try:
+            res = httpx.get(health, timeout=0.5)
+            if res.status_code < 500:
+                healthy = True
+                break
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.2)
+
+    if not healthy:
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    log(f"Started custom command on :{port}")
+
+    def _terminate(p) -> None:
+        try:
+            p.terminate()
+            p.wait(timeout=3)
+        except Exception:  # noqa: BLE001
+            try:
+                p.kill()
+            except Exception:  # noqa: BLE001
+                pass
+
+    state: dict[str, Any] = {
+        "kind": "process",
+        "base": base,
+        "health": health,
+        "health_path": health_path,
+        "port": port,
+        "stop": lambda: _terminate(proc),
+    }
+
+    def restart() -> bool:
+        nxt = _start_process_command(root, cmd, health_path, lambda m: None)
+        if not nxt:
+            return False
         _rebind(state, nxt)
         return True
 

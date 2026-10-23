@@ -244,3 +244,49 @@ def test_asset_version_changes_with_content(client, tmp_path, monkeypatch):
 
     restored = client.get("/").get_data(as_text=True)
     assert re.search(r"app\.js\?v=([a-f0-9]+)", restored).group(1) == token
+
+
+def test_gitlab_webhook_endpoint(client, monkeypatch):
+    import core.api as api_mod
+
+    monkeypatch.setattr(api_mod, "start_run_async", lambda rid, tok: None)
+    monkeypatch.setattr(api_mod, "GITHUB_WEBHOOK_SECRET", "")
+
+    # Push to atlas-shop/atlas-api
+    res = client.post(
+        "/webhook/gitlab",
+        json={
+            "project": {"path_with_namespace": "atlas-shop/atlas-api"},
+            "ref": "refs/heads/main",
+            "after": "abcdef1234567890",
+            "commits": [{"message": "GitLab test commit"}],
+        },
+        headers={"X-Gitlab-Event": "Push Hook"},
+    )
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["ok"] is True
+    assert data["ran"] is True
+    assert "run_id" in data
+
+
+def test_generic_webhook_endpoint(client, monkeypatch):
+    import core.api as api_mod
+
+    monkeypatch.setattr(api_mod, "start_run_async", lambda rid, tok: None)
+    monkeypatch.setattr(api_mod, "GITHUB_WEBHOOK_SECRET", "")
+
+    res = client.post(
+        "/webhook/generic",
+        json={
+            "repo": "atlas-shop/atlas-api",
+            "branch": "main",
+            "sha": "1234567890abcdef",
+            "message": "Generic trigger test",
+        },
+    )
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["ok"] is True
+    assert data["ran"] is True
+    assert "run_id" in data
