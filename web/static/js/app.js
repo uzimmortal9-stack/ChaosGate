@@ -204,10 +204,6 @@
             ${item("/observability", "Observability", "observability")}
             ${item("/docs", "Contract", "docs")}
           </div>
-          <div class="nav-pill-status">
-            <span class="pulse-dot"></span>
-            <span>Armed</span>
-          </div>
         </nav>
       </header>`;
   }
