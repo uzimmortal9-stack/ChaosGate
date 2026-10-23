@@ -174,8 +174,26 @@
     return `
       <header class="nav-fixed-wrap">
         <nav class="nav-pill glass">
-          <a href="/" class="brand-link">
-            <span class="brand-icon">C</span>
+          <a href="/" class="brand-link" title="ChaosGate Home">
+            <svg class="chaos-logo" width="22" height="22" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="nav-gate-grad" x1="12" y1="8" x2="52" y2="56" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#38bdf8"/>
+                  <stop offset="50%" stop-color="#818cf8"/>
+                  <stop offset="100%" stop-color="#c084fc"/>
+                </linearGradient>
+                <linearGradient id="nav-star-glow" x1="32" y1="18" x2="32" y2="46" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#ffffff"/>
+                  <stop offset="50%" stop-color="#38bdf8"/>
+                  <stop offset="100%" stop-color="#2dd4bf"/>
+                </linearGradient>
+              </defs>
+              <rect width="64" height="64" rx="18" fill="#0d0f17" stroke="rgba(255,255,255,0.14)" stroke-width="2"/>
+              <path d="M22 14 L30 14 L30 20 L24 20 L24 44 L30 44 L30 50 L22 50 C18.7 50 16 47.3 16 44 L16 20 C16 16.7 18.7 14 22 14 Z" fill="url(#nav-gate-grad)"/>
+              <path d="M42 14 L34 14 L34 20 L40 20 L40 44 L34 44 L34 50 L42 50 C45.3 50 48 47.3 48 44 L48 20 C48 16.7 45.3 14 42 14 Z" fill="url(#nav-gate-grad)"/>
+              <path class="logo-core-star" d="M32 18 L34.8 28.5 L44 32 L34.8 35.5 L32 46 L29.2 35.5 L20 32 L29.2 28.5 Z" fill="url(#nav-star-glow)"/>
+              <circle cx="32" cy="32" r="2.8" fill="#ffffff"/>
+            </svg>
             <span class="brand-name">ChaosGate</span>
           </a>
           <div class="nav-pill-links">
