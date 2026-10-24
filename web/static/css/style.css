@@ -468,93 +468,8 @@ button {
 }
 
 /* --------------------------------------------------------------------------
-   Verdicts, Dot-Matrix Status Badges (.st) & Kinetic Row Chevron (.go)
+   Verdicts & Circular SVG Score Ring
    -------------------------------------------------------------------------- */
-.st {
-  --c: #8b8b98;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 26px;
-  padding: 0 10px 0 6px;
-  min-width: 108px;
-  border-radius: 6px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--c) 14%, transparent), color-mix(in srgb, var(--c) 3%, transparent));
-  box-shadow: inset 1.5px 0 0 var(--c);
-  font: 500 10.5px/1 "JetBrains Mono", ui-monospace, Menlo, monospace;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: var(--c);
-  flex-shrink: 0;
-}
-
-.st svg {
-  width: 18px;
-  height: 18px;
-  flex: none;
-}
-
-.st svg circle {
-  fill: currentColor;
-  opacity: .16;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.st svg circle.on {
-  opacity: 1;
-  filter: drop-shadow(0 0 1.5px var(--c));
-  animation: pop .5s cubic-bezier(.2, 1.4, .4, 1) both;
-  animation-delay: calc(var(--i) * 45ms);
-}
-
-@keyframes pop {
-  from { opacity: .16; transform: scale(.4); }
-}
-
-.st.passed { --c: #3ecf8e; }
-.st.blocked { --c: #f0565c; }
-.st.running { --c: #a194ff; }
-.st.warning { --c: #f5a524; }
-.st.rolled  { --c: #9a9aa6; }
-
-.st.blocked svg circle.on {
-  animation: pop .5s cubic-bezier(.2, 1.4, .4, 1) both, throb 1.6s ease-in-out .8s infinite;
-  animation-delay: calc(var(--i) * 45ms), .8s;
-}
-
-@keyframes throb {
-  50% { opacity: .45; }
-}
-
-.st.running svg circle.on {
-  animation: chase 1.1s linear infinite;
-  animation-delay: calc(var(--i) * -68.75ms);
-}
-
-@keyframes chase {
-  0% { opacity: 1; }
-  60%, 100% { opacity: .14; }
-}
-
-.go {
-  width: 16px;
-  height: 16px;
-  color: #4a4a54;
-  transition: color .2s, transform .3s cubic-bezier(.22, 1, .36, 1);
-  flex-shrink: 0;
-}
-
-.go circle {
-  fill: currentColor;
-}
-
-.row:hover .go,
-.run-row:hover .go {
-  color: #ededf2;
-  transform: translateX(3px);
-}
-
 .verdict {
   display: inline-flex;
   align-items: center;
@@ -1327,3 +1242,92 @@ button {
 .space-y-4 > * + * { margin-top: 16px; }
 .space-y-3 > * + * { margin-top: 12px; }
 .space-y-2 > * + * { margin-top: 8px; }
+
+/* ==========================================================================
+   Dot-matrix glyph system (matrix.js)
+   ========================================================================== */
+.dm{width:16px;height:16px;flex:none;display:inline-block;vertical-align:middle}
+.dm circle{fill:currentColor;opacity:.16;transform-box:fill-box;transform-origin:center}
+.dm circle.on{opacity:1;animation:dm-pop .5s cubic-bezier(.2,1.4,.4,1) both;animation-delay:calc(var(--i)*45ms)}
+@keyframes dm-pop{from{opacity:.16;transform:scale(.4)}}
+.dm-st circle.on{filter:drop-shadow(0 0 1.5px currentColor)}
+.dm-failed circle.on{animation:dm-pop .5s cubic-bezier(.2,1.4,.4,1) both,dm-throb 1.6s ease-in-out infinite;animation-delay:calc(var(--i)*45ms),.8s}
+@keyframes dm-throb{50%{opacity:.4}}
+.dm-running circle.on{animation:dm-chase 1.1s linear infinite;animation-delay:calc(var(--i)*-68.75ms)}
+@keyframes dm-chase{0%{opacity:1}60%,100%{opacity:.14}}
+.dm-ic{width:12px;height:12px}
+.dm-ic circle{opacity:1}
+
+/* status badge */
+.st{--c:#8b8b98;display:inline-flex;align-items:center;gap:8px;height:26px;padding:0 10px 0 6px;min-width:104px;flex:none;
+  border-radius:6px;background:linear-gradient(90deg,color-mix(in srgb,var(--c) 14%,transparent),color-mix(in srgb,var(--c) 3%,transparent));
+  box-shadow:inset 1.5px 0 0 var(--c);font:500 10.5px/1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--c);white-space:nowrap}
+.st .dm{width:18px;height:18px}
+.st-passed{--c:var(--emerald)}.st-failed{--c:var(--rose)}.st-running{--c:#a194ff}.st-degraded{--c:var(--amber)}.st-rolled,.st-idle{--c:#9a9aa6}
+
+/* halftone logos */
+.dm-logo{flex:none;display:inline-block;vertical-align:middle;color:#d9d4ff}
+.dm-logo circle{fill:currentColor;transform-box:fill-box;transform-origin:center;animation:dm-in .6s var(--ease) both;animation-delay:var(--d)}
+.dm-logo circle.off{opacity:.14;animation:none}
+@keyframes dm-in{from{opacity:0;transform:scale(.2)}}
+.dm-logo.passed{color:var(--emerald)}.dm-logo.failed{color:var(--rose)}.dm-logo.degraded{color:var(--amber)}.dm-logo.running{color:#a194ff}.dm-logo.muted{color:#6c6c78}
+
+/* identicon */
+.dm-id{color:hsl(calc(250 + var(--hue) % 60) 90% 78%)}
+.dm-id circle{opacity:.12}
+
+/* score ring */
+.dm-ring{position:relative;display:grid;place-items:center;flex:none}
+.dm-ring svg{position:absolute;inset:0;width:100%;height:100%}
+.dm-ring circle{fill:rgba(255,255,255,.14);transform-box:fill-box;transform-origin:center}
+.dm-ring circle.on{fill:var(--c);animation:dm-pop .4s cubic-bezier(.2,1.4,.4,1) both;animation-delay:calc(var(--i)*18ms)}
+.dm-ring.big circle.on{animation-delay:calc(var(--i)*14ms);filter:drop-shadow(0 0 2px var(--c))}
+.dm-ring span{font:600 11px/1 var(--font-mono);color:var(--text-main);position:relative}
+.dm-ring.big span{font-size:30px;font-weight:600;letter-spacing:-.02em}
+
+/* trend bars */
+.dm-bars{width:100%;height:44px;margin-top:8px;display:block}
+.dm-bars circle{fill:rgba(255,255,255,.1);transform-box:fill-box;transform-origin:center}
+.dm-bars circle.g{fill:var(--emerald);animation:dm-pop .4s cubic-bezier(.2,1.4,.4,1) both;animation-delay:calc(var(--i)*22ms)}
+.dm-bars circle.b{fill:var(--rose);animation:dm-pop .4s cubic-bezier(.2,1.4,.4,1) both;animation-delay:calc(var(--i)*22ms)}
+
+/* stage pills with logos */
+.stage-pill-btn .dm-logo{width:16px;height:16px}
+.stage-pill-btn .st-mini{margin-left:2px}
+.stage-pill-btn .st-mini .dm{width:12px;height:12px}
+
+/* row chevron */
+.run-arrow .dm-ic,.chev .dm-ic{width:12px;height:12px}
+.run-row:hover .run-arrow{transform:translateX(3px)}
+
+/* repo card avatar */
+.repo-avatar.dm-avatar{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);display:grid;place-items:center}
+.tag-pill{display:inline-flex;align-items:center;gap:6px}
+.tag-pill .dm-logo{width:13px;height:13px}
+
+/* toolchain cards */
+.tool-card{padding:14px 16px;display:flex;align-items:center;gap:14px;border-radius:var(--radius-md)}
+.tool-card .tool-meta{min-width:0;flex:1}
+.tool-card strong{font-size:13.5px;display:block}
+.tool-card small{display:block;font:11px/1.4 var(--font-mono);color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.tool-card .tool-logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;background:rgba(255,255,255,.025);box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+.tool-card.off .dm-logo{color:#5c5c68}
+
+/* buttons with glyphs */
+.btn-primary .dm-logo,.btn-ghost .dm-logo{width:15px;height:15px;margin-right:7px;margin-top:-2px}
+.btn-primary .dm-logo{color:currentColor}
+.ws-tree-item .dm-logo{width:13px;height:13px;color:#8b8b98}
+.ws-tree-item.active-file .dm-logo{color:#c4b2ff}
+.toast{display:flex;align-items:center;gap:10px}
+.toast.ok{color:var(--text-main)}.toast .dm{width:14px;height:14px}
+.toast.ok .dm{color:var(--emerald)}.toast.err .dm{color:var(--rose)}
+.fail-banner .dm{color:var(--rose);width:18px;height:18px}
+.policy-label .dm-logo{width:14px;height:14px;margin-right:8px;margin-top:-2px}
+@media (prefers-reduced-motion:reduce){.dm circle,.dm-logo circle,.dm-ring circle,.dm-bars circle{animation:none!important}}
+.st{box-shadow:inset 1.5px 0 0 var(--c),inset 0 0 0 1px color-mix(in srgb,var(--c) 14%,transparent)}
+.dm-logo.idle{color:#55555f}
+.repo-avatar.dm-avatar{width:44px;height:44px}
+.tool-card{min-width:0;overflow:hidden}
+.grid-3:has(> .tool-card){grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:900px){.grid-3:has(> .tool-card){grid-template-columns:1fr}}
+.tool-card .st{min-width:auto}

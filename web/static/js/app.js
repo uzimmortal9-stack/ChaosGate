@@ -79,7 +79,7 @@
     if (!toastRoot) return;
     const el = document.createElement("div");
     el.className = `toast ${kind}`;
-    el.textContent = message;
+    el.innerHTML = DM.status(kind === "err" ? "failed" : "passed") + `<span>${esc(message)}</span>`;
     toastRoot.appendChild(el);
     setTimeout(() => {
       el.style.opacity = "0";
@@ -133,47 +133,13 @@
 
   // ---------------------------------------------------------------- Minimal Visual Components
   function Score(value, size = 36) {
-    const num = Math.round(Number(value) || 0);
-    const r = size / 2 - (size > 80 ? 6 : 3);
-    const c = 2 * Math.PI * r;
-    const color = num >= 75 ? "#34d399" : num >= 50 ? "#fcd34d" : "#fb7185";
-    const strokeWidth = size > 80 ? 6 : 2.5;
-    const fontSize = size > 80 ? "text-4xl" : "text-xs";
-    const offset = c * (1 - Math.max(0, Math.min(100, num)) / 100);
-    return `
-      <div class="score-wrap" style="width:${size}px; height:${size}px;">
-        <svg width="${size}" height="${size}" class="score-svg">
-          <circle cx="${size / 2}" cy="${size / 2}" r="${r}" stroke="rgba(255,255,255,0.08)" stroke-width="${strokeWidth}" fill="none" />
-          <circle cx="${size / 2}" cy="${size / 2}" r="${r}" stroke="${color}" stroke-width="${strokeWidth}" fill="none" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${offset}" />
-        </svg>
-        <span class="score-num ${fontSize}">${num}</span>
-      </div>`;
+    return DM.ring(value, size);
   }
 
-  const STATUS_SVGS = {
-    passed: `<svg viewBox="0 0 16 16"><circle cx="1.6" cy="1.6" r=".75"/><circle cx="4.8" cy="1.6" r=".75"/><circle cx="8.0" cy="1.6" r=".75"/><circle cx="11.2" cy="1.6" r=".75"/><circle cx="14.4" cy="1.6" r=".75"/><circle cx="1.6" cy="4.8" r=".75"/><circle cx="4.8" cy="4.8" r=".75"/><circle cx="8.0" cy="4.8" r=".75"/><circle cx="11.2" cy="4.8" r=".75"/><circle class="on" cx="14.4" cy="4.8" r="1.15" style="--i:5"/><circle cx="1.6" cy="8.0" r=".75"/><circle cx="4.8" cy="8.0" r=".75"/><circle cx="8.0" cy="8.0" r=".75"/><circle class="on" cx="11.2" cy="8.0" r="1.15" style="--i:5"/><circle cx="14.4" cy="8.0" r=".75"/><circle class="on" cx="1.6" cy="11.2" r="1.15" style="--i:3"/><circle cx="4.8" cy="11.2" r=".75"/><circle class="on" cx="8.0" cy="11.2" r="1.15" style="--i:5"/><circle cx="11.2" cy="11.2" r=".75"/><circle cx="14.4" cy="11.2" r=".75"/><circle cx="1.6" cy="14.4" r=".75"/><circle class="on" cx="4.8" cy="14.4" r="1.15" style="--i:5"/><circle cx="8.0" cy="14.4" r=".75"/><circle cx="11.2" cy="14.4" r=".75"/><circle cx="14.4" cy="14.4" r=".75"/></svg>`,
-    blocked: `<svg viewBox="0 0 16 16"><circle class="on" cx="1.6" cy="1.6" r="1.15" style="--i:0"/><circle cx="4.8" cy="1.6" r=".75"/><circle cx="8.0" cy="1.6" r=".75"/><circle cx="11.2" cy="1.6" r=".75"/><circle class="on" cx="14.4" cy="1.6" r="1.15" style="--i:4"/><circle cx="1.6" cy="4.8" r=".75"/><circle class="on" cx="4.8" cy="4.8" r="1.15" style="--i:2"/><circle cx="8.0" cy="4.8" r=".75"/><circle class="on" cx="11.2" cy="4.8" r="1.15" style="--i:4"/><circle cx="14.4" cy="4.8" r=".75"/><circle cx="1.6" cy="8.0" r=".75"/><circle cx="4.8" cy="8.0" r=".75"/><circle class="on" cx="8.0" cy="8.0" r="1.15" style="--i:4"/><circle cx="11.2" cy="8.0" r=".75"/><circle cx="14.4" cy="8.0" r=".75"/><circle cx="1.6" cy="11.2" r=".75"/><circle class="on" cx="4.8" cy="11.2" r="1.15" style="--i:4"/><circle cx="8.0" cy="11.2" r=".75"/><circle class="on" cx="11.2" cy="11.2" r="1.15" style="--i:6"/><circle cx="14.4" cy="11.2" r=".75"/><circle class="on" cx="1.6" cy="14.4" r="1.15" style="--i:4"/><circle cx="4.8" cy="14.4" r=".75"/><circle cx="8.0" cy="14.4" r=".75"/><circle cx="11.2" cy="14.4" r=".75"/><circle class="on" cx="14.4" cy="14.4" r="1.15" style="--i:8"/></svg>`,
-    running: `<svg viewBox="0 0 16 16"><circle class="on" cx="1.6" cy="1.6" r="1.15" style="--i:0"/><circle class="on" cx="4.8" cy="1.6" r="1.15" style="--i:1"/><circle class="on" cx="8.0" cy="1.6" r="1.15" style="--i:2"/><circle class="on" cx="11.2" cy="1.6" r="1.15" style="--i:3"/><circle class="on" cx="14.4" cy="1.6" r="1.15" style="--i:4"/><circle class="on" cx="1.6" cy="4.8" r="1.15" style="--i:15"/><circle cx="4.8" cy="4.8" r=".75"/><circle cx="8.0" cy="4.8" r=".75"/><circle cx="11.2" cy="4.8" r=".75"/><circle class="on" cx="14.4" cy="4.8" r="1.15" style="--i:5"/><circle class="on" cx="1.6" cy="8.0" r="1.15" style="--i:14"/><circle cx="4.8" cy="8.0" r=".75"/><circle cx="8.0" cy="8.0" r=".75"/><circle cx="11.2" cy="8.0" r=".75"/><circle class="on" cx="14.4" cy="8.0" r="1.15" style="--i:6"/><circle class="on" cx="1.6" cy="11.2" r="1.15" style="--i:13"/><circle cx="4.8" cy="11.2" r=".75"/><circle cx="8.0" cy="11.2" r=".75"/><circle cx="11.2" cy="11.2" r=".75"/><circle class="on" cx="14.4" cy="11.2" r="1.15" style="--i:7"/><circle class="on" cx="1.6" cy="14.4" r="1.15" style="--i:12"/><circle class="on" cx="4.8" cy="14.4" r="1.15" style="--i:11"/><circle class="on" cx="8.0" cy="14.4" r="1.15" style="--i:10"/><circle class="on" cx="11.2" cy="14.4" r="1.15" style="--i:9"/><circle class="on" cx="14.4" cy="14.4" r="1.15" style="--i:8"/></svg>`,
-    warning: `<svg viewBox="0 0 16 16"><circle cx="1.6" cy="1.6" r=".75"/><circle cx="4.8" cy="1.6" r=".75"/><circle class="on" cx="8.0" cy="1.6" r="1.15" style="--i:2"/><circle cx="11.2" cy="1.6" r=".75"/><circle cx="14.4" cy="1.6" r=".75"/><circle cx="1.6" cy="4.8" r=".75"/><circle cx="4.8" cy="4.8" r=".75"/><circle class="on" cx="8.0" cy="4.8" r="1.15" style="--i:3"/><circle cx="11.2" cy="4.8" r=".75"/><circle cx="14.4" cy="4.8" r=".75"/><circle cx="1.6" cy="8.0" r=".75"/><circle cx="4.8" cy="8.0" r=".75"/><circle class="on" cx="8.0" cy="8.0" r="1.15" style="--i:4"/><circle cx="11.2" cy="8.0" r=".75"/><circle cx="14.4" cy="8.0" r=".75"/><circle cx="1.6" cy="11.2" r=".75"/><circle cx="4.8" cy="11.2" r=".75"/><circle cx="8.0" cy="11.2" r=".75"/><circle cx="11.2" cy="11.2" r=".75"/><circle cx="14.4" cy="11.2" r=".75"/><circle cx="1.6" cy="14.4" r=".75"/><circle cx="4.8" cy="14.4" r=".75"/><circle class="on" cx="8.0" cy="14.4" r="1.15" style="--i:6"/><circle cx="11.2" cy="14.4" r=".75"/><circle cx="14.4" cy="14.4" r=".75"/></svg>`,
-    rolled: `<svg viewBox="0 0 16 16"><circle cx="1.6" cy="1.6" r=".75"/><circle cx="4.8" cy="1.6" r=".75"/><circle class="on" cx="8.0" cy="1.6" r="1.15" style="--i:2"/><circle cx="11.2" cy="1.6" r=".75"/><circle cx="14.4" cy="1.6" r=".75"/><circle cx="1.6" cy="4.8" r=".75"/><circle class="on" cx="4.8" cy="4.8" r="1.15" style="--i:2"/><circle cx="8.0" cy="4.8" r=".75"/><circle cx="11.2" cy="4.8" r=".75"/><circle cx="14.4" cy="4.8" r=".75"/><circle class="on" cx="1.6" cy="8.0" r="1.15" style="--i:2"/><circle class="on" cx="4.8" cy="8.0" r="1.15" style="--i:3"/><circle class="on" cx="8.0" cy="8.0" r="1.15" style="--i:4"/><circle class="on" cx="11.2" cy="8.0" r="1.15" style="--i:5"/><circle class="on" cx="14.4" cy="8.0" r="1.15" style="--i:6"/><circle cx="1.6" cy="11.2" r=".75"/><circle class="on" cx="4.8" cy="11.2" r="1.15" style="--i:4"/><circle cx="8.0" cy="11.2" r=".75"/><circle cx="11.2" cy="11.2" r=".75"/><circle cx="14.4" cy="11.2" r=".75"/><circle cx="1.6" cy="14.4" r=".75"/><circle cx="4.8" cy="14.4" r=".75"/><circle class="on" cx="8.0" cy="14.4" r="1.15" style="--i:6"/><circle cx="11.2" cy="14.4" r=".75"/><circle cx="14.4" cy="14.4" r=".75"/></svg>`,
-    chevron: `<svg class="go" viewBox="0 0 16 16"><circle cx="4.8" cy="1.6" r="1.15"/><circle cx="8.0" cy="4.8" r="1.15"/><circle cx="11.2" cy="8.0" r="1.15"/><circle cx="8.0" cy="11.2" r="1.15"/><circle cx="4.8" cy="14.4" r="1.15"/></svg>`
-  };
-
-  function Verdict(conclusion, customLabel = null) {
-    const s = String(conclusion || "").toUpperCase();
-    if (s === "PASS" || s === "PASSED" || s === "SUCCESS") {
-      return `<span class="st passed">${STATUS_SVGS.passed}${customLabel || "Passed"}</span>`;
-    }
-    if (s === "RUNNING" || s === "QUEUED" || s === "PENDING" || s === "IN_PROGRESS") {
-      return `<span class="st running">${STATUS_SVGS.running}${customLabel || "Running"}</span>`;
-    }
-    if (s === "DEGRADED" || s === "WARNING" || s === "AT_RISK" || s === "WARN") {
-      return `<span class="st warning">${STATUS_SVGS.warning}${customLabel || "At risk"}</span>`;
-    }
-    if (s === "ROLLBACK" || s === "ROLLED_BACK" || s === "ROLLED") {
-      return `<span class="st rolled">${STATUS_SVGS.rolled}${customLabel || "Rolled back"}</span>`;
-    }
-    return `<span class="st blocked">${STATUS_SVGS.blocked}${customLabel || "Blocked"}</span>`;
+  function Verdict(conclusion) {
+    const isRun = conclusion === "running" || conclusion === "queued";
+    if (isRun) return DM.badge("running");
+    return DM.badge(conclusion === "PASS" ? "passed" : "failed");
   }
 
   // Floating Pill Top Navigation
@@ -257,7 +223,7 @@
         ${breadcrumb ? `
           <div class="page-nav-bar rise">
             <a href="${breadcrumb.href}" class="back-link">
-              <span>←</span> ${esc(breadcrumb.label)}
+              ${DM.icon("back")} ${esc(breadcrumb.label)}
             </a>
             <span class="nav-separator">/</span>
             <span class="nav-current">${esc(breadcrumb.current)}</span>
@@ -329,7 +295,7 @@
         <div class="glass rise" style="overflow:hidden;">
           <div style="display:flex; justify-content:space-between; align-items:center; padding:18px 22px 14px;">
             <h2 style="font-size:15px; font-weight:600;">Recent runs</h2>
-            <a href="/runs" style="font-size:13px; color:var(--text-muted); transition:color 0.2s;">View all →</a>
+            <a href="/runs" style="font-size:13px; color:var(--text-muted); transition:color 0.2s;">View all ${DM.icon("chev")}</a>
           </div>
           ${RunList(runs.slice(0, 6))}
         </div>
@@ -396,7 +362,7 @@
                 </p>
               </div>
               ${Verdict(r.conclusion || r.status)}
-              ${STATUS_SVGS.chevron}
+              <span class="run-arrow">${DM.icon("chev")}</span>
             </a>
           </li>
         `).join("")}
@@ -454,7 +420,7 @@
         <!-- Failure Callout Banner (Clean single banner) -->
         ${failedStages.length > 0 ? `
           <div class="fail-banner glass rise">
-            <span class="fail-banner-dot"></span>
+            ${DM.status("failed")}
             <div style="min-width:0; flex:1;">
               <strong style="font-size:13px; color:var(--rose);">${esc(failedStages[0].name)}:</strong>
               <span style="font-size:13px; color:#fff0f3; margin-left:6px;">${esc(failedStages[0].summary || "Gate blocked by policy")}</span>
@@ -491,7 +457,7 @@
               <span style="font-size:12px; color:var(--text-dim);">(${stages.length})</span>
             </div>
             <button data-act="toggle-full-log" class="btn-ghost" style="font-size:12px; padding:3px 10px;">
-              ${state.showFullLog ? "← Back to Stage Inspector" : "View Full Log"}
+              ${state.showFullLog ? "Back to Stage Inspector" : "View Full Log"}
             </button>
           </div>
 
@@ -499,13 +465,12 @@
           <div class="stage-pipeline-nav">
             ${stages.map((s) => {
               const isSel = openStageKey === s.key && !state.showFullLog;
-              const dotColor = s.status === "passed" ? "bg-emerald-400" : s.status === "failed" ? "bg-rose-400" : s.status === "degraded" ? "bg-amber-300" : "bg-indigo-400";
               return `
                 <button 
                   data-act="select-stage" 
                   data-key="${esc(s.key)}" 
                   class="stage-pill-btn ${s.status} ${isSel ? "active" : ""}">
-                  <span class="stage-pill-dot ${dotColor}"></span>
+                  ${DM.logo(s.key, 16, DM.kindOf(s.status))}
                   <span>${esc(s.key)}</span>
                   ${s.duration_ms ? `<span style="font-size:11px; opacity:0.55; margin-left:2px;">${(s.duration_ms / 1000).toFixed(1)}s</span>` : ""}
                 </button>
@@ -531,11 +496,11 @@
             <div class="stage-inspector rise" style="margin-top:14px;">
               <div class="stage-inspector-head">
                 <div style="display:flex; align-items:center; gap:10px;">
-                  <span class="stage-pill-dot ${currentStage.status === "passed" ? "bg-emerald-400" : currentStage.status === "failed" ? "bg-rose-400" : currentStage.status === "degraded" ? "bg-amber-300" : "bg-indigo-400"}"></span>
+                  ${DM.logo(currentStage.key || "gate", 22, DM.kindOf(currentStage.status))}
                   <strong style="font-size:14.5px;">${esc(currentStage.name || currentStage.key)}</strong>
                   <span style="font-size:12px; color:var(--text-dim);">${esc(currentStage.key)} · ${currentStage.duration_ms ? `${(currentStage.duration_ms / 1000).toFixed(2)}s` : "completed"}</span>
                 </div>
-                ${Verdict(currentStage.status, (currentStage.status || "ready").toUpperCase())}
+                ${DM.badge(currentStage.status || "idle", currentStage.status ? currentStage.status : "Ready")}
               </div>
               <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">${esc(currentStage.summary || "Stage completed.")}</p>
               ${currentStage.metrics && Object.keys(currentStage.metrics).length > 0 ? `
@@ -563,7 +528,7 @@
           <div>
             <h1 class="page-title">Repositories</h1>
           </div>
-          <button data-act="open-connect-repo" class="btn-primary">Connect repository</button>
+          <button data-act="open-connect-repo" class="btn-primary">${DM.logo("github", 15)}Connect repository</button>
         </div>
 
         <div class="repo-grid">
@@ -573,13 +538,13 @@
             return `
               <a href="/repos/${r.id}" class="glass lift repo-card rise">
                 <div class="repo-card-head">
-                  <div class="repo-avatar">${initials}</div>
+                  <div class="repo-avatar dm-avatar">${DM.identicon(r.full_name || r.name, 26)}</div>
                   ${lr ? Verdict(lr.conclusion) : `<span style="font-size:12px; color:var(--text-dim);">No runs</span>`}
                 </div>
                 <p class="repo-name">${esc(r.name || r.full_name)}</p>
                 <div class="repo-tags">
-                  <span class="tag-pill">${esc(r.runtime || "Python")}</span>
-                  ${r.framework ? `<span class="tag-pill">${esc(r.framework)}</span>` : ""}
+                  <span class="tag-pill">${DM.logo((r.runtime || "python").toLowerCase(), 13)}${esc(r.runtime || "Python")}</span>
+                  ${r.framework ? `<span class="tag-pill">${DM.has(String(r.framework).toLowerCase()) ? DM.logo(String(r.framework).toLowerCase(), 13) : ""}${esc(r.framework)}</span>` : ""}
                   <span style="margin-left:auto; font-size:11.5px;">${lr ? ago(lr.created_at) : (r.default_branch || "main")}</span>
                 </div>
               </a>
@@ -633,11 +598,7 @@
           </div>
           <div class="glass stat-panel">
             <p class="stat-label">Trend</p>
-            <div class="score-trend-bar">
-              ${scored.length ? scored.map((r) => `
-                <div class="score-trend-seg" style="height:${Math.max(12, r.resilience_score ?? r.score ?? 50)}%; background:${(r.resilience_score ?? r.score ?? 0) >= 75 ? "var(--emerald)" : "var(--rose)"};"></div>
-              `).join("") : `<div class="score-trend-seg" style="height:80%; background:var(--emerald);"></div><div class="score-trend-seg" style="height:90%; background:var(--emerald);"></div>`}
-            </div>
+            ${DM.bars(scored.slice().reverse().map((r) => r.resilience_score ?? r.score ?? 0))}
           </div>
         </div>
 
@@ -664,11 +625,11 @@
         <div class="ws-tree">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding:0 4px;">
             <span style="font-weight:600; font-size:12px; text-transform:uppercase; color:var(--text-dim);">Files</span>
-            <button data-act="refresh-tree" style="color:var(--text-muted); font-size:12px;">↻</button>
+            <button data-act="refresh-tree" style="color:var(--text-muted);">${DM.icon("refresh")}</button>
           </div>
           ${files.length ? files.map((f) => `
             <div class="ws-tree-item ${state.activePath === f.path ? "active-file" : ""}" data-act="open-file" data-path="${esc(f.path)}">
-              <span>${f.type === "dir" ? "📁" : "📄"}</span>
+              ${DM.logo(f.type === "dir" ? "folder" : "file", 13)}
               <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(f.name)}</span>
             </div>
           `).join("") : `<p style="padding:16px 8px; font-size:12px; color:var(--text-dim);">No files mounted.</p>`}
@@ -736,7 +697,7 @@
 
           <div class="glass policy-group">
             <div class="policy-row">
-              <span class="policy-label">GitHub Token</span>
+              <span class="policy-label">${DM.logo("github", 14)}GitHub Token</span>
               <input name="github_token" type="password" placeholder="ghp_••••••••••••" value="${p.github_token ? "••••••••••••••••" : ""}" class="text-input" style="width:200px;" />
             </div>
           </div>
@@ -759,18 +720,19 @@
             <h1 class="page-title">Observability</h1>
           </div>
           <div style="display:flex; gap:8px;">
-            <a href="/metrics" target="_blank" class="btn-ghost" style="padding:6px 14px; font-size:13px;">/metrics</a>
-            <button data-act="publish-grafana" class="btn-primary">Publish Grafana</button>
+            <a href="/metrics" target="_blank" class="btn-ghost" style="padding:6px 14px; font-size:13px; display:inline-flex; align-items:center;">${DM.logo("prometheus", 15)}/metrics</a>
+            <button data-act="publish-grafana" class="btn-primary">${DM.logo("grafana", 15)}Publish Grafana</button>
           </div>
         </div>
 
         <div class="glass" style="padding:20px;">
           <h2 style="font-size:14px; font-weight:600; margin-bottom:14px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Toolchain Health</h2>
           <div class="grid-3" style="gap:10px;">
-            ${Object.entries(tools).map(([name, t]) => `
-              <div class="glass" style="padding:12px 16px; display:flex; justify-content:space-between; align-items:center; border-radius:var(--radius-md);">
-                <strong style="font-size:13.5px;">${esc(name)}</strong>
-                ${t.available ? Verdict("PASS", "Ready") : Verdict("DEGRADED", "Degraded")}
+            ${Object.entries(tools.tools || tools).filter(([, t]) => t && typeof t === "object").map(([name, t]) => `
+              <div class="glass tool-card ${t.available ? "" : "off"}">
+                <div class="tool-logo">${DM.logo(name, 26)}</div>
+                <div class="tool-meta"><strong>${esc(name)}</strong><small title="${esc(t.detail || "")}">${esc(t.version || t.detail || "")}</small></div>
+                ${DM.badge(t.available ? "passed" : "degraded", t.available ? "Ready" : "Offline")}
               </div>
             `).join("")}
           </div>
@@ -827,7 +789,7 @@ policies:
           <div class="modal-sheet glass rise" data-stop>
             <div class="modal-sheet-head">
               <h3>Roll back ${esc((run?.commit_sha || "commit").slice(0, 7))}</h3>
-              <button class="close-btn" data-act="close-modal">✕</button>
+              <button class="close-btn" data-act="close-modal">${DM.icon("close")}</button>
             </div>
             ${state.revertLoading ? `
               <p style="padding:32px 0; text-align:center; color:var(--text-dim); font-size:14px;">Analyzing 3-way merge…</p>
@@ -865,8 +827,8 @@ policies:
         <div class="modal-backdrop" data-act="close-modal">
           <div class="modal-sheet glass rise" data-stop>
             <div class="modal-sheet-head">
-              <h3>Connect Repository</h3>
-              <button class="close-btn" data-act="close-modal">✕</button>
+              <h3 style="display:flex;align-items:center;gap:10px;">${DM.logo("github", 20)}Connect Repository</h3>
+              <button class="close-btn" data-act="close-modal">${DM.icon("close")}</button>
             </div>
             <form data-form="connect-repo" class="space-y-4">
               <div>
@@ -1093,14 +1055,14 @@ policies:
     if (act === "publish-grafana") {
       try {
         el.disabled = true;
-        el.textContent = "Publishing…";
+        el.innerHTML = `${DM.logo("grafana", 15, "running")}Publishing…`;
         await api.publishDashboard();
         toast("Grafana dashboard published!");
       } catch (err) {
         toast("Publish failed: " + err.message, "err");
       } finally {
         el.disabled = false;
-        el.textContent = "Publish Grafana";
+        el.innerHTML = `${DM.logo("grafana", 15)}Publish Grafana`;
       }
       return;
     }
