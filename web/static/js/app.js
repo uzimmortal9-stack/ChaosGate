@@ -10,6 +10,9 @@
     run: null,
     artifacts: [],
     githubRepos: [],
+    ghFilter: "",
+    ghLoading: false,
+    connectTab: "repos",
     policy: {},
     contract: "",
     observability: null,
@@ -50,6 +53,9 @@
     },
     me: () => api.req("/api/me"),
     demo: () => api.req("/api/auth/demo", { method: "POST" }),
+    githubPat: (token) => api.req("/api/auth/github", { method: "POST", body: { token } }),
+    logout: () => api.req("/api/auth", { method: "DELETE" }),
+    ghRepos: (q = "") => api.req(`/api/github/repos${q ? `?q=${encodeURIComponent(q)}` : ""}`),
     repos: () => api.req("/api/repos"),
     repo: (id) => api.req(`/api/repos/${id}`),
     addRepo: (full_name) => api.req("/api/repos", { method: "POST", body: { full_name } }),
@@ -129,6 +135,21 @@
     const s = Number(seconds);
     if (s < 60) return `${s.toFixed(1)}s`;
     return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+  }
+
+  async function loadGhRepos() {
+    if (!state.me?.workspace?.connected) return;
+    state.ghLoading = true;
+    paint();
+    try {
+      const res = await api.ghRepos();
+      state.githubRepos = res.repos || [];
+    } catch (err) {
+      toast("Could not load GitHub repos: " + err.message, "err");
+    } finally {
+      state.ghLoading = false;
+      paint();
+    }
   }
 
   // ---------------------------------------------------------------- Minimal Visual Components
@@ -211,6 +232,19 @@
             ${item("/settings", "Policies", "settings")}
             ${item("/observability", "Observability", "observability")}
             ${item("/docs", "Contract", "docs")}
+          </div>
+          <div class="nav-gh-wrap">
+            ${state.me?.workspace?.connected && state.me?.workspace?.github_login ? `
+              <button type="button" data-act="open-connect-repo" class="nav-gh-pill connected" title="Connected as @${esc(state.me.workspace.github_login)}">
+                ${state.me.workspace.github_avatar ? `<img src="${esc(state.me.workspace.github_avatar)}" class="nav-gh-avatar" />` : DM.logo("github", 14)}
+                <span>@${esc(state.me.workspace.github_login)}</span>
+              </button>
+            ` : `
+              <button type="button" data-act="open-connect-repo" class="nav-gh-pill" title="Connect GitHub Account">
+                ${DM.logo("github", 14)}
+                <span>Connect GitHub</span>
+              </button>
+            `}
           </div>
         </nav>
       </header>`;
@@ -823,22 +857,161 @@ policies:
     }
 
     if (state.modal.kind === "connect-repo") {
+      const ws = state.me?.workspace || {};
+      const linked = !!(ws.connected && ws.github_login);
+      const tab = state.connectTab || (linked ? "repos" : "account");
+      const oauth = !!state.me?.oauth_enabled;
+
+      const filtered = (state.githubRepos || []).filter((r) =>
+        !state.ghFilter || r.full_name.toLowerCase().includes(state.ghFilter.toLowerCase())
+      );
+
       return `
         <div class="modal-backdrop" data-act="close-modal">
-          <div class="modal-sheet glass rise" data-stop>
+          <div class="modal-sheet modal-lg glass rise" data-stop>
             <div class="modal-sheet-head">
-              <h3 style="display:flex;align-items:center;gap:10px;">${DM.logo("github", 20)}Connect Repository</h3>
+              <h3 style="display:flex;align-items:center;gap:10px;">${DM.logo("github", 20)} GitHub & Repositories</h3>
               <button class="close-btn" data-act="close-modal">${DM.icon("close")}</button>
             </div>
-            <form data-form="connect-repo" class="space-y-4">
-              <div>
-                <input id="connect-repo-name" class="text-input" style="width:100%;" placeholder="owner/repo" required />
-              </div>
-              <div style="display:flex; justify-content:flex-end; gap:8px;">
-                <button type="button" data-act="close-modal" class="btn-ghost">Cancel</button>
-                <button type="submit" class="btn-primary">Add</button>
-              </div>
-            </form>
+
+            <!-- Tab Switcher -->
+            <div class="connect-tabs">
+              <button type="button" class="connect-tab-btn ${tab === "repos" ? "active" : ""}" data-act="set-connect-tab" data-tab="repos">
+                ${DM.logo("folder", 13)} Your Repositories ${state.githubRepos.length ? `(${state.githubRepos.length})` : ""}
+              </button>
+              <button type="button" class="connect-tab-btn ${tab === "account" ? "active" : ""}" data-act="set-connect-tab" data-tab="account">
+                ${DM.logo("github", 13)} ${linked ? `@${esc(ws.github_login)}` : "Connect Account"}
+              </button>
+              <button type="button" class="connect-tab-btn ${tab === "manual" ? "active" : ""}" data-act="set-connect-tab" data-tab="manual">
+                ${DM.icon("plus")} Add by URL
+              </button>
+            </div>
+
+            ${tab === "repos" ? `
+              ${linked ? `
+                <div class="gh-account-card">
+                  <div style="display:flex; align-items:center; gap:10px;">
+                    ${ws.github_avatar ? `<img src="${esc(ws.github_avatar)}" class="nav-gh-avatar" style="width:28px;height:28px;" />` : DM.logo("github", 20)}
+                    <div>
+                      <div style="font-size:13px; font-weight:600; color:var(--text-main);">Connected as @${esc(ws.github_login)}</div>
+                      <div style="font-size:11px; color:var(--text-dim);">${esc(ws.github_name || "")} · auth via ${esc(ws.auth_method || "token")}</div>
+                    </div>
+                  </div>
+                  <button type="button" data-act="disconnect-github" class="btn-ghost" style="color:var(--rose); font-size:11.5px; padding:4px 8px;">Disconnect</button>
+                </div>
+
+                <div style="display:flex; gap:8px; margin-bottom:10px;">
+                  <input id="gh-repo-filter" value="${esc(state.ghFilter || "")}" placeholder="Search repositories…" class="text-input" style="flex:1;" />
+                  <button type="button" data-act="fetch-gh-repos" class="btn-ghost" title="Refresh repositories" style="padding:0 10px;">${DM.icon("refresh")}</button>
+                </div>
+
+                <div class="gh-repo-list">
+                  ${state.ghLoading ? `
+                    <p style="padding:32px 0; text-align:center; color:var(--text-dim); font-size:13px;">${DM.logo("github", 16, "running")} Fetching repositories from GitHub…</p>
+                  ` : filtered.length ? filtered.map((r) => {
+                    const already = (state.repos || []).some((x) => (x.full_name || "").toLowerCase() === r.full_name.toLowerCase());
+                    return `
+                      <div class="gh-repo-item">
+                        <div style="min-width:0; flex:1; padding-right:12px;">
+                          <div class="gh-repo-name">${esc(r.full_name)}</div>
+                          <div class="gh-repo-meta">
+                            ${r.language ? `<span class="tag-pill">${DM.has(r.language.toLowerCase()) ? DM.logo(r.language.toLowerCase(), 11) : ""}${esc(r.language)}</span>` : ""}
+                            <span>${r.private ? "Private" : "Public"}</span>
+                            ${r.pushed_at ? `<span>pushed ${ago(r.pushed_at)}</span>` : ""}
+                          </div>
+                        </div>
+                        ${already ? `
+                          <span class="tag-pill" style="color:var(--emerald); font-size:11.5px; border-color:rgba(62,207,142,0.25);">${DM.status("passed")} Added</span>
+                        ` : `
+                          <button type="button" data-act="add-gh-repo" data-name="${esc(r.full_name)}" class="btn-primary" style="padding:5px 12px; font-size:12px;">+ Add to Gate</button>
+                        `}
+                      </div>
+                    `;
+                  }).join("") : `
+                    <div style="padding:28px 0; text-align:center;">
+                      <p style="color:var(--text-dim); font-size:13px; margin-bottom:10px;">No repositories loaded or matching search.</p>
+                      <button type="button" data-act="fetch-gh-repos" class="btn-primary">${DM.logo("github", 14)} Load GitHub Repositories</button>
+                    </div>
+                  `}
+                </div>
+              ` : `
+                <div style="padding:24px 12px; text-align:center;">
+                  <div style="display:inline-flex; padding:14px; border-radius:50%; background:rgba(255,255,255,0.03); margin-bottom:12px;">
+                    ${DM.logo("github", 32)}
+                  </div>
+                  <h4 style="font-size:15px; font-weight:600; color:var(--text-main); margin-bottom:6px;">Link your GitHub account</h4>
+                  <p style="font-size:13px; color:var(--text-dim); max-width:380px; margin:0 auto 18px;">
+                    Connect your GitHub account to import repositories with one click and enable automated commit checks and PR gates.
+                  </p>
+                  <button type="button" data-act="set-connect-tab" data-tab="account" class="btn-primary">
+                    ${DM.logo("github", 15)} Connect Account
+                  </button>
+                </div>
+              `}
+            ` : tab === "account" ? `
+              ${linked ? `
+                <div class="gh-account-card">
+                  <div style="display:flex; align-items:center; gap:12px;">
+                    ${ws.github_avatar ? `<img src="${esc(ws.github_avatar)}" class="nav-gh-avatar" style="width:36px;height:36px;" />` : DM.logo("github", 24)}
+                    <div>
+                      <div style="font-size:14px; font-weight:600; color:var(--text-main);">@${esc(ws.github_login)}</div>
+                      <div style="font-size:11.5px; color:var(--text-dim);">${esc(ws.github_name || "")} · auth via ${esc(ws.auth_method || "token")}</div>
+                      <div style="font-size:10.5px; color:var(--text-dim); font-family:var(--font-mono); margin-top:2px;">scopes: ${esc((ws.scopes || []).join(", "))}</div>
+                    </div>
+                  </div>
+                  <button type="button" data-act="disconnect-github" class="btn-ghost" style="color:var(--rose); font-size:12px; padding:5px 12px;">Disconnect</button>
+                </div>
+
+                <div style="margin-top:16px;">
+                  <h4 style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:8px;">Switch Account or Update Token</h4>
+                  <form data-form="github-pat" class="space-y-3">
+                    <input name="token" type="password" placeholder="ghp_… or github_pat_…" required class="text-input" style="width:100%;" />
+                    <button type="submit" class="btn-primary" style="width:100%;">${DM.logo("github", 14)} Update GitHub Token</button>
+                  </form>
+                </div>
+              ` : `
+                <div class="space-y-4">
+                  ${oauth ? `
+                    <div>
+                      <p style="font-size:12.5px; color:var(--text-dim); margin-bottom:8px;">One click, no token handling. Grants repository access and status reporting.</p>
+                      <a href="/api/auth/github/login" class="btn-primary" style="width:100%; padding:10px 0; justify-content:center;">
+                        ${DM.logo("github", 16)} Continue with GitHub (OAuth)
+                      </a>
+                    </div>
+                    <div style="text-align:center; font-size:11.5px; color:var(--text-dim);">— or use a personal access token —</div>
+                  ` : `
+                    <div class="glass" style="padding:10px 14px; font-size:12px; color:var(--text-dim); border-radius:var(--radius-md);">
+                      GitHub OAuth is not configured on this host. Use a Personal Access Token below:
+                    </div>
+                  `}
+
+                  <form data-form="github-pat" class="space-y-3">
+                    <div>
+                      <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px; font-weight:500;">
+                        Personal access token <span style="color:var(--text-dim); font-size:11px;">(requires <code>repo</code> and <code>workflow</code> scopes)</span>
+                      </label>
+                      <input name="token" type="password" autocomplete="off" placeholder="ghp_… or github_pat_…" required class="text-input" style="width:100%;" />
+                    </div>
+                    <button type="submit" class="btn-primary" style="width:100%;">
+                      ${DM.logo("github", 14)} Link Account with Token
+                    </button>
+                  </form>
+                </div>
+              `}
+            ` : `
+              <form data-form="connect-repo" class="space-y-4">
+                <p style="font-size:12.5px; color:var(--text-muted);">
+                  Connect any public repository without logging in, or specify a repository full name:
+                </p>
+                <div>
+                  <input id="connect-repo-name" class="text-input" style="width:100%;" placeholder="owner/repo or https://github.com/owner/repo" required />
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:8px;">
+                  <button type="button" data-act="close-modal" class="btn-ghost">Cancel</button>
+                  <button type="submit" class="btn-primary">Add Repository</button>
+                </div>
+              </form>
+            `}
           </div>
         </div>
       `;
@@ -849,23 +1022,34 @@ policies:
   // ---------------------------------------------------------------- Routing & Render
   function parseRoute() {
     const p = path();
-    if (p === "/" || p === "/overview" || p === "/console") return { name: "overview" };
-    if (p === "/runs" || p === "/console/runs") return { name: "runs" };
-    if (p === "/repos" || p === "/console/repos") return { name: "repos" };
-    if (p === "/settings" || p === "/console/settings" || p === "/policy") return { name: "settings" };
-    if (p === "/observability" || p === "/console/observability") return { name: "observability" };
-    if (p === "/docs" || p === "/console/docs") return { name: "docs" };
+    const params = new URLSearchParams(location.search);
+    const connect = params.get("connect") === "1" || p === "/connect" || p === "/console/connect";
+    if (p === "/" || p === "/overview" || p === "/console") return { name: "overview", connect };
+    if (p === "/runs" || p === "/console/runs") return { name: "runs", connect };
+    if (p === "/repos" || p === "/console/repos" || p === "/connect" || p === "/console/connect") return { name: "repos", connect };
+    if (p === "/settings" || p === "/console/settings" || p === "/policy") return { name: "settings", connect };
+    if (p === "/observability" || p === "/console/observability") return { name: "observability", connect };
+    if (p === "/docs" || p === "/console/docs") return { name: "docs", connect };
     let m = p.match(/^\/(?:console\/)?repos\/([^/]+)$/);
-    if (m) return { name: "repo", id: m[1] };
+    if (m) return { name: "repo", id: m[1], connect };
     m = p.match(/^\/(?:console\/)?runs\/([^/]+)$/);
-    if (m) return { name: "run", id: m[1] };
-    return { name: "overview" };
+    if (m) return { name: "run", id: m[1], connect };
+    return { name: "overview", connect };
   }
 
   async function render() {
     const route = parseRoute();
     try {
       if (!state.me) state.me = await api.me();
+      if (route.connect && !state.modal) {
+        state.modal = { kind: "connect-repo" };
+        state.connectTab = state.me?.workspace?.connected ? "repos" : "account";
+        if (state.me?.workspace?.connected && !state.githubRepos.length) {
+          try {
+            state.githubRepos = (await api.ghRepos()).repos || [];
+          } catch (_) {}
+        }
+      }
       if (route.name === "overview") {
         state.me = await api.me();
         state.repos = (await api.repos()).repos;
@@ -1007,7 +1191,57 @@ policies:
 
     if (act === "open-connect-repo") {
       state.modal = { kind: "connect-repo" };
+      state.connectTab = state.me?.workspace?.connected ? "repos" : "account";
+      if (state.me?.workspace?.connected && !state.githubRepos.length) {
+        loadGhRepos();
+      }
       return paint();
+    }
+
+    if (act === "set-connect-tab") {
+      state.connectTab = el.dataset.tab;
+      if (state.connectTab === "repos" && state.me?.workspace?.connected && !state.githubRepos.length) {
+        loadGhRepos();
+      }
+      return paint();
+    }
+
+    if (act === "fetch-gh-repos") {
+      return loadGhRepos();
+    }
+
+    if (act === "add-gh-repo") {
+      const name = el.dataset.name;
+      if (!name) return;
+      try {
+        el.disabled = true;
+        el.textContent = "Adding…";
+        const res = await api.addRepo(name);
+        toast(`Connected ${name}`);
+        state.modal = null;
+        state.repos = (await api.repos()).repos;
+        go(`/repos/${res.repo.id}`);
+      } catch (err) {
+        toast("Failed: " + err.message, "err");
+        el.disabled = false;
+        el.textContent = "+ Add to Gate";
+      }
+      return;
+    }
+
+    if (act === "disconnect-github") {
+      try {
+        el.disabled = true;
+        await api.logout();
+        state.me = await api.me();
+        state.githubRepos = [];
+        state.connectTab = "account";
+        toast("Disconnected GitHub account");
+        paint();
+      } catch (err) {
+        toast("Disconnect failed: " + err.message, "err");
+      }
+      return;
     }
 
     if (act === "close-modal") {
@@ -1091,9 +1325,33 @@ policies:
       return paint();
     }
 
+    if (kind === "github-pat") {
+      const fd = new FormData(form);
+      const token = (fd.get("token") || "").trim();
+      if (!token) return toast("Enter a personal access token", "err");
+      try {
+        const btn = form.querySelector("button[type=submit]");
+        if (btn) { btn.disabled = true; btn.textContent = "Connecting…"; }
+        await api.githubPat(token);
+        state.me = await api.me();
+        toast(`Connected as @${state.me.workspace.github_login}`);
+        state.connectTab = "repos";
+        await loadGhRepos();
+        paint();
+      } catch (err) {
+        toast("Connection failed: " + err.message, "err");
+        paint();
+      }
+      return;
+    }
+
     if (kind === "connect-repo") {
-      const name = document.getElementById("connect-repo-name")?.value.trim();
+      let name = document.getElementById("connect-repo-name")?.value.trim() || "";
       if (!name) return;
+      for (const prefix of ["https://github.com/", "http://github.com/", "git@github.com:"]) {
+        if (name.startsWith(prefix)) name = name.slice(prefix.length);
+      }
+      name = name.replace(/\.git$/, "").replace(/^\/+|\/+$/g, "");
       try {
         const res = await api.addRepo(name);
         state.modal = null;
@@ -1105,6 +1363,18 @@ policies:
       }
     }
   }
+
+  document.addEventListener("input", (e) => {
+    if (e.target.id === "gh-repo-filter") {
+      state.ghFilter = e.target.value;
+      const q = state.ghFilter.toLowerCase();
+      const items = document.querySelectorAll(".gh-repo-item");
+      items.forEach((item) => {
+        const name = item.querySelector(".gh-repo-name")?.textContent.toLowerCase() || "";
+        item.style.display = !q || name.includes(q) ? "flex" : "none";
+      });
+    }
+  });
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && state.modal) {
