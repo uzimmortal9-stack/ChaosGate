@@ -238,7 +238,7 @@ def compose_config(compose_file: Path, log: Logger) -> dict[str, Any]:
                 pass
         else:
             log(f"docker compose config rejected the file: {out.splitlines()[-1][:200] if out else ''}")
-            return {"valid": False, "error": out[-500:], "engine": "docker-compose"}
+            return {"valid": False, "error": out[-500:], "issues": [out[-500:]], "engine": "docker-compose"}
 
     try:
         import yaml
