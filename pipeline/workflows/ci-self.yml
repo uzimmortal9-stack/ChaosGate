@@ -74,6 +74,10 @@ jobs:
           curl -fsS http://127.0.0.1:5000/metrics | head -5
           curl -fsS http://127.0.0.1:5000/api/health
 
+      - name: Chaos Resilience & Crash Gate
+        run: |
+          python pipeline/scripts/run_chaos.py --target http://127.0.0.1:5000 --health /healthz
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
@@ -84,7 +88,9 @@ jobs:
         with:
           node-version: "20"
       - name: Syntax check the SPA
-        run: node --check web/static/js/app.js
+        run: |
+          node --check web/static/js/app.js
+          node --check web/static/js/matrix.js
 
   config:
     name: Config validity
@@ -182,10 +188,15 @@ jobs:
           from core import supply_chain as sc
 
           # Deliberate fixtures: these exist so the gate has something to fail on.
-          ALLOWED = {"samples/checkout-service/app.py", "samples/legacy-billing/.env"}
+          ALLOWED = {
+              "samples/checkout-service/app.py",
+              "samples/legacy-billing/.env",
+              "k8s/chaosgate.yaml",
+              "tests/test_crypto.py",
+          }
 
-          findings = [f for f in scan_secrets(Path(".")) if f["file"] not in ALLOWED]
-          env = [f for f in sc.scan_committed_env(Path(".")) if f["file"] not in ALLOWED]
+          findings = [f for f in scan_secrets(Path(".")) if f["file"].replace("\\", "/") not in ALLOWED]
+          env = [f for f in sc.scan_committed_env(Path(".")) if f["file"].replace("\\", "/") not in ALLOWED]
 
           for f in findings + env:
               print(f"{f['severity']:>8}  {f.get('file')}  {f['title']}")

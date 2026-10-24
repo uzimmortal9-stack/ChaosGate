@@ -184,6 +184,20 @@ jobs:
             echo "no k6 script at pipeline/k6/load.js — skipping"
           fi
 
+      # ------------------------------------------------------------ chaos & crash resilience
+      - name: Chaos Resilience & Crash Test (k6 Fault Injection)
+        if: steps.detect.outputs.compose == '1' || steps.detect.outputs.contract == '1'
+        shell: bash
+        env:
+          TARGET: ${{ vars.CHAOSGATE_TARGET || 'http://localhost:8000' }}
+          HEALTH_PATH: ${{ vars.CHAOSGATE_HEALTH || '/health' }}
+        run: |
+          echo "── Chaos Resilience & Fault Injection ──"
+          python pipeline/scripts/run_chaos.py \
+            --target "$TARGET" \
+            --health "$HEALTH_PATH" \
+            --k6-script pipeline/k6/chaos.js
+
       # ----------------------------------------------------------- artifacts
       - name: Upload artifacts
         if: always()
@@ -192,6 +206,7 @@ jobs:
           name: chaosgate-report-${{ github.run_id }}
           path: |
             k6-summary.json
+            chaos-summary.json
             **/junit*.xml
             **/coverage*.xml
           if-no-files-found: ignore
